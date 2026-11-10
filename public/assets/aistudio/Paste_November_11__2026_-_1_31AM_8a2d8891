@@ -1,0 +1,854 @@
+CHESS FORGE — FUNCTIONALITY SPECIFICATION v2.0
+
+This document describes what Chess Forge does, feature by feature. Use it to build, test, or verify the app. It contains no marketing, no metrics, no roadmap — only functionality.
+
+---
+
+1. APP OVERVIEW
+
+Chess Forge is an Android chess analysis and training app. It has four modes:
+
+1. Practice Mode — load a PGN and analyze move by move with full game context, move classification, and accuracy tracking.
+2. Screenshot Analyzer — load an image of a chess position and analyze it, with batch processing support.
+3. Live Overlay — capture the screen in real time and draw the best move as an arrow on top of any app, with turn detection and game reconstruction.
+4. Puzzle Mode — solve tactical puzzles generated from your own games, screenshot positions, or engine-constructed positions.
+
+All four modes share the same engine pool (Stockfish 19 with NNUE), the same board rendering, the same vision pipeline, the same game state tracker, and the same analysis output format.
+
+---
+
+2. MODE 1 — PRACTICE MODE
+
+2.1 Loading a PGN
+
+The user can load a PGN from three sources:
+- File picker — select a `.pgn` file from device storage.
+- Clipboard paste — paste PGN text directly.
+- Lichess study URL — paste a Lichess study URL and the app fetches the PGN.
+
+2.2 Board and Move List
+
+- A chessboard is displayed at the top of the screen showing the current position.
+- A move list is displayed at the bottom, showing all moves in the game in standard algebraic notation.
+- Each move in the list is tappable — tapping jumps to that position.
+- The user can step forward and backward with:
+  - Arrow keys (external keyboard)
+  - Swipe left/right gestures
+  - Previous/next buttons below the board
+- Undo — the user can take back moves and try alternatives. The original move is preserved as a variation.
+
+2.3 Analysis on Every Position
+
+When the user navigates to any position (by tapping a move or stepping forward/backward), the app:
+1. Queues the position with the engine pool (quick-analysis instance).
+2. Displays:
+   - The best move as an arrow on the board.
+   - The evaluation bar (horizontal bar showing centipawn score).
+   - The top 3 moves with their evaluations (MultiPV 3, user-adjustable 1–5).
+   - The depth reached and nodes searched.
+   - Move classification for the move that led to this position (see 2.7).
+
+2.4 Exports
+
+- Copy FEN — copies the current position's FEN to clipboard.
+- Export PGN — saves the full game with engine annotations (eval comments on every move, move classifications, accuracy percentages) as a `.pgn` file.
+- Share Analysis Image — generates a shareable image (PNG) showing the board position, best move arrow, evaluation, and move classification. The image includes a small "Analyzed with Chess Forge" watermark in the corner.
+
+2.5 Offline
+
+Practice Mode works fully offline. No network, no permissions required.
+
+2.6 Game Context Panel
+
+Below the move list, a collapsible panel shows:
+
+- Opening identification — ECO code and opening name (e.g., "B90: Sicilian Defense: Najdorf Variation"). Identified from the move sequence. Tapping the opening name shows a brief description and common plans.
+- Game phase indicator — opening / middlegame / endgame, based on material count, piece development, and move number. Displayed as a subtle colored bar: blue (opening), amber (middlegame), gray (endgame).
+- Tactical alerts — real-time flags detected by the engine:
+  - "Hanging piece — your knight on f3 is undefended."
+  - "Mate in 2 available."
+  - "Opponent's last move was a blunder (-1.4)."
+  - "Fork opportunity detected."
+- Material balance — visual piece differential (e.g., "+N" for an extra knight, "-QP" for down a queen and pawn).
+- Clock estimates — if the PGN includes clock annotations, estimated remaining time for both sides.
+
+2.7 Move Classification
+
+After each move in the move list, a colored indicator appears:
+
+Indicator	Classification	Definition	
+🟦	Best	Engine's top choice	
+🟩	Good	Within 0.3 pawns of best	
+🟨	Inaccuracy	0.3–1.0 pawns worse than best	
+🟧	Mistake	1.0–2.0 pawns worse than best	
+🟥	Blunder	2.0+ pawns worse than best	
+
+- Classification thresholds are user-adjustable in Settings → Engine → Classification Thresholds.
+- Tapping a classification indicator shows:
+  - The evaluation before and after the move.
+  - The best move that was available.
+  - A one-line natural-language explanation: "This hangs your knight to Qxe5."
+- Haptic feedback — a light buzz for blunders, a gentle tap for best moves. Toggleable in Settings → Board.
+
+2.8 Accuracy Meter
+
+After the game ends (or at any point during review), an accuracy percentage is calculated and displayed:
+
+- Your accuracy: 78.3% — computed using a weighted formula based on evaluation drops per move.
+- Accuracy is shown per-game and per-phase (opening accuracy, middlegame accuracy, endgame accuracy).
+- Accuracy is included in exported PGNs as a comment header.
+
+2.9 Interactive Engine Lines
+
+Each of the top 3 engine lines is tappable. Tapping a line:
+1. Plays the first move of that line on the board as a variation (dashed arrow).
+2. Shows the next 3 moves of the line as a text continuation below the board.
+3. Allows the user to step through the variation move by move using the same navigation controls.
+4. A "Return to main line" button appears in the move list header.
+5. Variations are displayed in the move list with indentation and a subtle color difference from the main game.
+6. The user can create their own variations by making moves on the board at any point. These are saved with the PGN.
+
+2.10 Critical Moments
+
+The app automatically identifies critical moments in the game — positions where the evaluation swung by more than 1.5 pawns in a single move. These are:
+- Marked in the move list with a ⚡ icon.
+- Collected in a "Critical Moments" view accessible from the game context panel.
+- Each critical moment shows the position, the move played, the best move, and the evaluation swing.
+
+---
+
+3. MODE 2 — SCREENSHOT ANALYZER
+
+3.1 Loading an Image
+
+The user can load a screenshot from:
+- Android share sheet — the app appears as a share target for any image. Sharing an image from any other app opens Chess Forge directly into Screenshot Mode with that image loaded.
+- Gallery picker — select any image from device storage.
+- File picker — select any image file.
+- Batch selection — select multiple images at once for sequential processing (see 3.7).
+
+3.2 Board Region Selection
+
+- On first use, the app auto-detects the board region in the image and highlights it with a green rectangle.
+- The user can drag the corners of the rectangle to adjust.
+- The region is saved per-user and reused for future screenshots (from the same device / same app source).
+- A "Reset region" option is available in settings.
+
+3.3 Vision Pipeline
+
+The app processes the image through the following pipeline:
+
+1. Board detection — a fallback chain of methods attempts to locate the board (see 3.3a).
+2. Perspective warp — the board is flattened to a perfect square.
+3. Square slicing — the warped board is split into 64 equal squares.
+4. Piece classification — a YOLOv8 TFLite model classifies each square into one of: white pawn, white rook, white knight, white bishop, white queen, white king, black pawn, black rook, black knight, black bishop, black queen, black king, or empty.
+5. Ensemble inference — each square is classified twice: once on the original crop, once on a contrast-enhanced version. Predictions are averaged.
+6. Context validation — the classified position is validated (see 3.3b). Failing squares are re-inferred with higher-resolution crops.
+7. Orientation detection — the app determines which color is at the bottom of the board by checking the rank positions of pawns. If pawns appear on rank 2, white is at the bottom. If on rank 7, black is at the bottom.
+8. Confidence scoring — each square gets a confidence score (0.0–1.0). The overall FEN confidence is the minimum of all 64 square confidences.
+9. FEN generation — the classifications are assembled into a FEN string. Castling rights and en passant are set as best-effort (see 3.5).
+10. FEN validation — the FEN passes through the validation layer (see 3.3b).
+11. Engine analysis — Stockfish runs on the validated FEN with the current engine preset.
+
+3.3a Board Detection Fallback Chain
+
+The board detection pipeline tries methods in order:
+
+1. YOLO board detector — a lightweight YOLO model trained specifically on chessboard detection. Fastest and most accurate for standard screenshots.
+2. Line intersection detection — OpenCV Hough line transform to find the grid pattern of 9 horizontal and 9 vertical lines.
+3. Color segmentation — detect the alternating light/dark square pattern using color histogram analysis.
+4. Manual selection — user drags a rectangle over the board. Always available as a fallback.
+
+If method 1 fails or returns low confidence, fall through to method 2, then 3, then 4. The user is never stuck without a path forward.
+
+3.3b FEN Validation Layer
+
+After piece classification and before engine analysis, the FEN passes through a validation layer:
+
+```
+FENValidator:
+├── Check: exactly 2 kings (1 white, 1 black)
+├── Check: pawn count ≤ 8 per color
+├── Check: no pawns on rank 1 or rank 8
+├── Check: total piece count plausible (given possible captures)
+├── Check: side to move is not in an impossible state
+│   (e.g., both kings in check simultaneously)
+├── Check: castling rights consistent with king/rook positions
+│   (if K rights, king and h1 rook should be in place)
+└── If any check fails → flag specific squares for re-inference
+    with 2x resolution crops, then re-validate
+```
+
+If validation still fails after re-inference, the confidence score is capped at 0.74, forcing the position into the manual confirmation or rejection tier.
+
+3.4 Confidence Gating
+
+Based on the overall FEN confidence:
+
+- Confidence ≥ 0.90 — analysis is shown directly. Solid arrow, green confidence dot.
+- Confidence 0.75–0.89 — the app shows a thumbnail of the detected board with a "Confirm" (✓) and "Retry" (✗) button. The user confirms that the detected position matches the actual board. If confirmed, analysis is shown with a dashed arrow and yellow confidence dot.
+- Confidence < 0.75 — analysis is rejected. The app shows "Position unclear — try a clearer screenshot or adjust the crop." No arrow, no analysis. The user can retry with a manual crop.
+
+3.5 Castling Rights and En Passant
+
+These cannot be reliably inferred from a single screenshot:
+- Castling rights default to "KQkq" (all rights assumed). If the app cannot verify them, a small ⚠ icon appears next to the evaluation badge.
+- En passant target square is left empty in the FEN.
+
+3.6 Analysis Output
+
+After a position is confirmed, the app displays the same analysis as Practice Mode:
+- Best move arrow on the board.
+- Evaluation bar.
+- Top 3 moves with evaluations (interactive — see 2.9).
+- Depth and nodes.
+- Move classification (if the position is part of a known game sequence).
+- Copy FEN button.
+- Export PGN button (from this position as a starting point).
+- "Generate Puzzle" button — offers to create a puzzle from this position if tactics are detected.
+
+3.7 Batch Screenshot Processing
+
+The user can select multiple screenshots at once (from gallery or file picker). The app:
+1. Processes each screenshot through the vision pipeline sequentially.
+2. Displays a progress indicator: "Processing 12/47 screenshots..."
+3. Attempts to link consecutive screenshots into a game sequence by comparing positions (each position should be reachable from the previous by a single legal move).
+4. If screenshots form a coherent game, offers to save it as a PGN with move classifications.
+5. If screenshots cannot be linked, each is treated as an independent position.
+6. All results are added to History.
+
+---
+
+4. MODE 3 — LIVE OVERLAY
+
+4.1 Starting the Overlay
+
+The user starts the overlay from a button in the app:
+1. The app requests MediaProjection permission via the system consent dialog.
+2. The app requests SYSTEM_ALERT_WINDOW permission (draw over other apps) via a settings redirect.
+3. Once both permissions are granted, the app starts a Foreground Service and shows a persistent notification with a Stop button and a profile selector (see 8.5).
+
+4.2 Board Region Selection
+
+- On first start, the user is shown an overlay rectangle covering the currently visible board.
+- The user drags the corners of the rectangle to fit the board precisely.
+- The region is saved and persists across sessions.
+- If the user rotates the device, capture pauses and prompts the user to rotate back (the region is invalidated by rotation).
+
+4.3 Capture Loop
+
+The Foreground Service runs a continuous loop:
+
+1. Capture the screen at the configured frame rate (default 5 FPS, adjustable 1–15).
+2. Crop the captured frame to the user's saved board region.
+3. Compute a perceptual hash of the cropped region.
+4. Stability filter — if the hash does not match the previous two hashes, discard the frame. This prevents analysis of mid-animation frames.
+5. If the frame is stable, run the vision pipeline (see 4.3a).
+6. If confidence ≥ 0.75, send the FEN to the engine pool.
+7. The engine returns the best move and evaluation.
+8. Update the overlay with the new arrow and evaluation badge.
+
+4.3a Incremental Vision Processing
+
+To minimize latency and battery usage:
+
+- Diff masking — a pixel-level diff is computed between the current stable frame and the previous stable frame. Only squares that changed are re-classified. A typical chess move changes 2 squares (source and destination); a capture changes 3.
+- Square classification cache — each square's classification and confidence are cached. Unchanged squares use cached values.
+- Previous position prior — the previous position's FEN is used as a Bayesian prior. A square that contained a white pawn should not suddenly contain a black queen unless a capture and promotion occurred in the same move.
+- Turn inference — by comparing the previous and current positions, the app determines which side just moved and which side is now to move (see 4.10).
+
+This reduces average inference time by approximately 90% compared to full-board classification on every frame.
+
+4.4 The Best-Move Arrow
+
+The arrow is the primary visual element of the overlay.
+
+Positioning:
+- The arrow is drawn in screen coordinates, computed from the saved board region.
+- The center of each square is at:
+  - `square_x = region.x + (file + 0.5) * (region.w / 8)`
+  - `square_y = region.y + (rank + 0.5) * (region.h / 8)`
+- The arrow goes from the center of the source square to the center of the destination square.
+- Orientation is respected — if black is at the bottom, the coordinates are flipped.
+
+Visual properties:
+- Solid green (`#00E676`) by default for the best move.
+- Solid yellow (`#FFD600`) when there is only one legal move.
+- Solid blue (`#448AFF`) for captures (user-customizable, see 8.4).
+- Solid red (`#FF1744`) for checks and checkmates.
+- Dashed green if confidence is 0.75–0.89 (mid confidence).
+- No arrow if confidence < 0.75.
+- Semi-transparent (75% opacity by default, adjustable 40–100%).
+- Black outline (1 dp, 30% opacity) for visibility on any board color.
+- Soft glow (25% opacity) around the arrow.
+- Shaft width 3–5 dp, scaled to board size.
+- Arrowhead 6× shaft width.
+- Tail taper — slight taper from shaft to arrowhead.
+
+Animation:
+- Fade in over 200 ms on a new move.
+- Fade out over 150 ms when the position changes.
+- Soft pulse (±10% opacity) every 1.5 s.
+- No slide, bounce, or spin.
+- Reduced motion mode — all animations disabled (see Section 14).
+
+Special cases:
+- Capture — arrow drawn in capture color (default blue); small × symbol near the arrowhead.
+- Check — arrow drawn in red; `+` symbol near the arrowhead.
+- Checkmate — arrow drawn in red; `#` symbol; arrowhead pulsing.
+- Castling — main arrow shows king path; secondary smaller arrow shows rook path.
+- En passant — arrow drawn diagonally; ⚠ icon appears.
+- Promotion — arrow drawn normally; `=Q`/`=R`/`=B`/`=N` label appears near the arrowhead.
+- No legal moves — no arrow; overlay shows "Checkmate" or "Stalemate."
+
+User customization:
+- Arrow color: green (default), blue, purple, orange.
+- Per-move-type colors: user can set different colors for quiet moves, captures, checks, and only-moves.
+- Arrow thickness: thin / medium / thick.
+- Arrow opacity: 40–100%.
+- Pulse animation: on/off.
+- Show eval badge: on/off.
+- Show confidence dot: on/off.
+- Show coordinate hint (small move text like "Nf3"): on/off.
+
+4.5 Secondary Overlay Elements
+
+- Evaluation badge — small pill in the top-right of the board region showing `+0.35` (green) or `−1.2` (red).
+- Confidence dot — 8 dp dot next to the badge. Green (≥0.90), yellow (0.75–0.89), red (<0.75). If red, the arrow is not shown.
+- Castling warning icon — small ⚠ shown if the best move is castling and rights could not be verified.
+- Turn indicator — small text showing whose move it is: "White to move" / "Black to move" / "Your move" (see 4.10).
+- Drag handle — 40×40 dp circle at top-right of the screen for repositioning the overlay.
+- Minimize button — 30×30 dp × at top-left. Collapses the whole overlay to a floating 50×50 bubble.
+
+4.6 Overlay Interaction Rules
+
+- The overlay uses `FLAG_NOT_FOCUSABLE` — touches pass through to the underlying app. The user can interact with the chess app normally.
+- No auto-play. The arrow is a suggestion only.
+- No input interception.
+- No key logging.
+- The overlay stops immediately when the user taps Stop in the notification.
+
+4.7 Battery Management
+
+- Battery kill switch — if the board region has been unchanged for 5 seconds, capture drops to 1 FPS.
+- Resume — as soon as a change is detected (pixel-diff threshold), capture returns to the configured rate.
+- Screen off — capture pauses immediately when the screen turns off (listens for `ACTION_SCREEN_OFF`).
+- Screen on — capture resumes on `ACTION_SCREEN_ON`.
+- App backgrounded — when Chess Forge itself is backgrounded (overlay still running), the engine pool pauses deep analysis and only runs quick analysis.
+
+4.8 Competitive App Detection
+
+- The app monitors the foreground package name.
+- If the foreground app is Chess.com, Lichess, or Chess24, a small toast appears: "Live analysis in competitive games violates platform terms of service and may result in account bans."
+- The app does not block, does not intercept, does not automate anything.
+
+4.9 Stopping the Overlay
+
+The user can stop the overlay from:
+- The Stop button in the persistent notification.
+- The minimize button followed by a long-press on the bubble.
+- The Android recent apps screen (the service is killed by the system).
+
+When stopped:
+- The overlay window is removed.
+- The MediaProjection session is released.
+- The Foreground Service stops.
+- The notification disappears.
+- If game reconstruction captured moves, the app offers to save the game for post-game analysis (see 4.11).
+
+4.10 Turn Detection and Game State Tracking
+
+The overlay maintains a Game State Object that tracks the full game in progress:
+
+```
+Game State Object:
+├── Move history (UCI moves from game start or overlay start)
+├── Current FEN
+├── Move number
+├── Side to move
+├── Position history (all FENs seen this session)
+├── Board orientation (white at bottom / black at bottom)
+├── Captured pieces (both sides)
+├── Material balance
+├── Opening identification (updated as moves are detected)
+├── Game phase (opening / middlegame / endgame)
+├── Clock estimates (if clock is visible in the captured region)
+└── Tactical alert flags
+```
+
+Turn detection:
+- When a stable frame differs from the previous stable frame, a move has been played.
+- The app determines which side moved by comparing piece positions and applying chess legality rules.
+- The arrow only shows for the side to move.
+- If the user is playing a game, the arrow shows the player's best move (not the opponent's).
+- A small indicator shows whose turn it is: "Your move" (white/black) or "Opponent's move."
+
+Game reconstruction:
+- Every detected move is recorded with its timestamp.
+- If the overlay was active from the start of the game, the full game can be reconstructed.
+- If the overlay was started mid-game, the app notes this: "Game reconstruction may be incomplete."
+
+4.11 Post-Game Analysis
+
+When the overlay detects that a game has ended (final position stable for 10+ seconds, or user stops the overlay after 10+ moves were captured):
+
+- The app offers: "Analyze this game"
+- The reconstructed game is loaded into Practice Mode with:
+  - Full move list (from detected moves).
+  - Move classifications for every move.
+  - Accuracy percentages for both sides.
+  - Critical moments highlighted.
+  - Opening identification.
+- If the overlay was started mid-game, a warning appears: "Analysis may be incomplete — overlay was not active from the beginning. First N moves are unknown."
+
+---
+
+5. MODE 4 — PUZZLE MODE
+
+5.1 Puzzle Sources
+
+Puzzles are generated from three sources:
+
+1. Your games — positions from the user's own PGNs where a tactic was missed (a move classified as mistake or blunder where a significantly better alternative existed).
+2. Screenshot positions — tactical positions detected during screenshot analysis. The "Generate Puzzle" button (see 3.6) creates a puzzle if the engine detects a forcing line.
+3. Engine-generated — the app constructs tactical puzzles from any position by finding forcing lines (checks, captures, threats that lead to significant evaluation swings).
+
+5.2 Puzzle Flow
+
+1. A position is shown on the board. The side to move and objective are displayed ("White to play and win material").
+2. The user taps a piece and then a destination square to make their move.
+3. If correct, the opponent's response is played automatically.
+4. If incorrect, the move is rejected with a subtle shake animation and the user tries again. After 3 failed attempts, a hint appears (the first piece to move is highlighted).
+5. After completion, the full solution is shown with engine evaluation and explanation.
+6. The user's puzzle rating is updated.
+
+5.3 Puzzle Rating
+
+- Each puzzle has a difficulty rating based on:
+  - Depth of the solution (number of moves).
+  - Evaluation swing (how much the tactic wins).
+  - Number of plausible but incorrect alternatives.
+- The user's puzzle rating is tracked locally and adjusts after each puzzle using a simplified Glicko-2 system.
+- Rating history is graphed over time.
+
+5.4 Daily Puzzle
+
+- A home screen widget displays a daily puzzle (rotating from the puzzle database).
+- Tapping the widget opens Puzzle Mode directly.
+- The daily puzzle is cached locally — no network required after first load.
+
+5.5 Puzzle Statistics
+
+- Total puzzles solved / attempted.
+- Success rate by puzzle type (mate, material win, positional crush).
+- Rating history graph.
+- Weakest categories (e.g., "Knight forks: 45% success").
+
+---
+
+6. ENGINE BEHAVIOR
+
+Engine: Stockfish 19 with embedded NNUE (1 MB neural network).
+
+6.1 Engine Pool
+
+The app maintains a pool of two Stockfish instances:
+
+Instance	Purpose	Priority	
+Quick	Current position analysis, arrow updates, live overlay	High — always responsive	
+Deep	Full game review, move classification, puzzle generation, batch processing	Low — can be interrupted	
+
+- The quick instance is never blocked by the deep instance.
+- When the app is backgrounded, the deep instance is paused.
+- When the device is low on memory, the deep instance is shut down first.
+- If the user navigates to a new position, the quick instance's current search is cancelled (Stockfish `stop` command) and the new search is queued.
+
+6.2 Presets
+
+The user selects one of four presets (all free):
+
+Preset	Depth	Movetime	
+Fast	10	200 ms	
+Balanced	15	500 ms (default)	
+Deep	20	1500 ms	
+Maximum	25	3000 ms	
+
+Additionally, the user can open Settings → Engine → Custom and set depth (10–25) and movetime (100–5000 ms) manually.
+
+6.3 Analysis Output
+
+For every analysis, the app computes and displays:
+- Best move in algebraic notation (e.g., `Nf3`, `O-O`, `e8=Q`).
+- Evaluation in centipawns (e.g., `+0.35`), or `M3` for mate-in-3.
+- Top 3 lines (MultiPV 3, adjustable 1–5) with their evaluations and continuation moves.
+- Depth reached.
+- Nodes searched.
+- Move classification for the move that led to this position (requires pre-move evaluation, cached).
+- Natural-language explanation of the best move: "Nf3 develops the knight and controls the center."
+
+6.4 Cancellation
+
+If the user navigates to a new position before analysis finishes, the previous search is cancelled cleanly (Stockfish `stop` command) before the new search starts. The deep instance's search is only cancelled if the quick instance needs resources.
+
+6.5 Classification Thresholds
+
+User-adjustable thresholds for move classification (see 2.7):
+
+Threshold	Default	Range	
+Good	0.3 pawns	0.1–0.5	
+Inaccuracy	1.0 pawns	0.5–1.5	
+Mistake	2.0 pawns	1.5–3.0	
+Blunder	2.0+ pawns	Fixed at mistake threshold	
+
+---
+
+7. BOARD RENDERING
+
+- The chessboard is rendered on a square Canvas.
+- Three themes: light (default), dark, and contrast (high-contrast for color-blind users), plus auto to match system theme.
+- Additional board color schemes: blue/black, green/black, brown/cream, tournament (green/white).
+- Pieces use standard Unicode chess glyphs by default; an alternate SVG piece set is available in settings.
+- Highlight states:
+  - Selected square — highlighted when the user taps a piece.
+  - Legal move indicators — small dots on legal destination squares.
+  - Last move — both source and destination squares highlighted with a subtle overlay.
+  - Check — the checked king's square tinted red.
+  - Best move arrow — rendered over the board in all modes when analysis is available.
+  - Threat arrow — optional secondary arrow showing the opponent's best threat (toggleable).
+- Coordinates — displayed on the edges of the board (a–h, 1–8), toggleable.
+- Haptic feedback — light vibration on move classification (blunder = strong buzz, best move = gentle tap), toggleable.
+
+---
+
+8. SETTINGS
+
+8.1 Engine
+- Preset (Fast / Balanced / Deep / Maximum / Custom)
+- Custom depth slider (10–25)
+- Custom movetime slider (100–5000 ms)
+- MultiPV count (1–5, default 3)
+- Classification thresholds (Good / Inaccuracy / Mistake — see 6.5)
+- Engine pool behavior (aggressive / balanced / battery-saver)
+
+8.2 Board
+- Theme (light / dark / contrast / auto)
+- Board color scheme (default / blue / green / brown / tournament)
+- Piece set (Unicode / SVG)
+- Show coordinates (on/off)
+- Show last-move highlight (on/off)
+- Show legal-move dots (on/off)
+- Show threat arrow (on/off)
+- Haptic feedback (on/off)
+
+8.3 Appearance
+- App theme (light / dark / system)
+- Accent color (Forge Teal default, plus 5 alternatives)
+- Font size (small / medium / large / system)
+- Reduced motion (on/off)
+
+8.4 Overlay
+- Frame rate (1–15 FPS, default 5)
+- Arrow color (green / blue / purple / orange)
+- Per-move-type arrow colors (quiet / capture / check / only-move)
+- Arrow thickness (thin / medium / thick)
+- Arrow opacity (40–100%)
+- Pulse animation (on/off)
+- Show eval badge (on/off)
+- Show confidence dot (on/off)
+- Show coordinate hint (on/off)
+- Show turn indicator (on/off)
+- Reset board region
+
+8.5 Profiles
+
+The user can create and switch between engine profiles — named combinations of all settings:
+
+- Blitz profile — Fast preset, arrow only, no eval badge, minimal overlay elements.
+- Study profile — Deep preset, full analysis panel, interactive lines, threat arrows.
+- Custom profiles — user-defined combinations of engine, board, appearance, and overlay settings.
+
+Profiles are switchable from:
+- The main screen (profile dropdown).
+- The overlay notification (quick-switch between two favorite profiles).
+- Settings → Profiles.
+
+8.6 Data
+- View analysis history
+- Export all data as JSON
+- Backup & Restore — export all settings, history, saved board regions, and puzzle progress as a single `.forgebackup` file. Import from backup. Optional automatic weekly backup to local storage.
+- Delete all data
+- Clear board region cache
+- Clear puzzle statistics
+
+8.7 About
+- Version
+- Privacy policy link
+- Terms of service link
+- Open source licenses
+- Report a bug
+
+---
+
+9. HISTORY
+
+Every analysis performed in any mode is saved to a local history database.
+
+- History is displayed as a scrollable list in the History screen.
+- Each entry shows:
+  - Thumbnail of the board position (rendered from the FEN).
+  - FEN string (truncated).
+  - Best move.
+  - Evaluation.
+  - Timestamp.
+  - Source mode (Practice / Screenshot / Overlay / Puzzle).
+  - Move classification (if applicable).
+- Tapping an entry opens it in the corresponding mode.
+- History is searchable by FEN substring, date, opening name, or move text.
+- History is filterable by source mode, date range, and evaluation range.
+- History is deletable per-entry, by filter, or all at once.
+- Analysis sessions — consecutive analyses from a single game or overlay session are grouped and collapsible.
+
+---
+
+10. ONBOARDING
+
+10.1 First-Launch Screens
+
+Three intro screens, each with a single illustration and one line of text:
+
+1. "Analyze any chess position — study games, review moves, solve puzzles."
+2. "Load a PGN, share a screenshot, or use the live overlay."
+3. "All analysis happens on your phone. Nothing is uploaded."
+
+10.2 Ethics Disclaimer
+
+After the intro screens, a mandatory ethics screen appears:
+
+> "Chess Forge is a training and analysis tool for studying positions, reviewing games, and solving puzzles. Using it in live online chess games violates the terms of service of most chess platforms and may result in account bans. Chess Forge is not intended for, and its developers do not condone, use in live competitive play."
+
+A single "I Understand" button dismisses the screen. The user must tap it to proceed. This screen also appears after every app update if the ethics text has changed.
+
+10.3 Permissions Walkthrough
+
+The onboarding flow ends with a permissions walkthrough:
+- Screen A: "To use live overlay, Chess Forge needs to see your screen." → Button opens MediaProjection dialog.
+- Screen B: "To draw arrows on top of your chess app, Chess Forge needs to draw over other apps." → Button opens SYSTEM_ALERT_WINDOW settings.
+
+Each permission screen can be skipped. The user can grant permissions later from Settings → Overlay.
+
+---
+
+11. DATA MODEL
+
+The app stores the following locally (Room database + SharedPreferences):
+
+- Analysis history — every FEN analyzed with its result, timestamp, source mode, move classification, and session grouping.
+- Game records — reconstructed games from overlay sessions and loaded PGNs, with move classifications and accuracy data.
+- Puzzle database — generated puzzles with ratings, solution lines, and source references.
+- Puzzle progress — user's puzzle rating, solved/attempted history, statistics by category.
+- User settings — engine preset, classification thresholds, board theme, appearance, overlay preferences, active profile.
+- Profiles — named setting combinations.
+- Board region — the saved rectangle for Screenshot and Overlay modes.
+- Onboarding state — which intro screens have been seen, ethics disclaimer version.
+- Backups — locally stored `.forgebackup` files (if auto-backup is enabled).
+
+No user account, no cloud sync, no server communication (except opt-in crash reports).
+
+---
+
+12. ERROR HANDLING
+
+The app must fail gracefully in all of the following scenarios:
+
+- Stockfish fails to start — show "Engine error — please restart the app"; retry up to 3 times. If the deep instance fails, fall back to a single-instance mode with a notification.
+- YOLO model fails to load — show "Vision model error — please reinstall"; block Screenshot, Overlay, and Puzzle modes; Practice Mode still works.
+- Board not detected in screenshot — show "Could not find a board in this image"; allow retry or manual crop.
+- Confidence below 0.75 — show confidence-specific message; allow retry.
+- FEN validation fails — show which squares failed validation; allow manual correction by tapping squares to cycle through piece options.
+- MediaProjection dies mid-capture (Overlay) — show "Screen capture was interrupted"; prompt to re-grant permission.
+- SYSTEM_ALERT_WINDOW revoked mid-session (Overlay) — stop the overlay; show "Overlay permission was revoked."
+- Device rotated during overlay — pause capture; show "Please rotate back to resume."
+- Screen locked — pause capture; resume automatically on unlock.
+- Device runs out of memory — cancel deep analysis first, then quick analysis if needed; show "Not enough memory — try a lower depth."
+- User force-stops the app — all services terminate cleanly; no zombie notifications.
+- Corrupted backup file — show "Backup file is corrupted or incompatible"; do not partially import.
+- Puzzle generation fails — show "Could not generate a puzzle from this position"; the position is still available for normal analysis.
+
+---
+
+13. WHAT THE APP DOES NOT DO
+
+For clarity, the app does not:
+
+- Automate moves in any chess app.
+- Intercept keystrokes or touches from other apps.
+- Read any app's internal memory or network traffic.
+- Send any board position, FEN, screenshot, or personal data to any server.
+- Track users across sessions or devices.
+- Show ads.
+- Require any account, sign-in, or payment.
+- Limit the number of analyses, screenshots, overlay sessions, or puzzles.
+- Hide any feature behind a paywall.
+- Use any anti-cheat evasion technique.
+- Modify, inject into, or patch any other app.
+
+---
+
+14. ACCESSIBILITY
+
+- TalkBack support — all UI elements have content descriptions. The board is navigable via swipe gestures with spoken square names ("e4, white pawn").
+- Color-blind mode — arrows use patterns (striped, dotted, solid) in addition to colors. Evaluation bar uses shapes (▲▼) in addition to color. Board uses the high-contrast theme.
+- Font scaling — all text respects system font size.
+- High contrast mode — increases arrow outline width, evaluation badge contrast, and board square contrast.
+- Reduced motion — disables pulse animation, arrow fade effects, and shake animations.
+- One-handed mode — moves primary controls to the bottom of the screen for large devices.
+- Screen reader optimized — puzzle mode provides audio hints ("The knight on f3 can jump to e5").
+
+---
+
+15. APP SHORTCUTS AND WIDGETS
+
+- App shortcuts (long-press app icon):
+  - "New Screenshot Analysis" — opens Screenshot Mode directly.
+  - "Start Live Overlay" — begins the overlay permission flow.
+  - "Daily Puzzle" — opens Puzzle Mode with today's puzzle.
+  - "Last Analysis" — returns to the most recent analysis.
+
+- Home screen widget (4×2):
+  - Shows daily puzzle position (interactive — tapping pieces on the widget opens the full puzzle).
+  - Shows last analysis summary (position thumbnail + eval + best move).
+  - Shows current puzzle rating.
+
+---
+
+16. FUNCTIONAL TEST CHECKLIST
+
+The following must be true for the app to be considered functionally complete:
+
+Practice Mode:
+- Loads a 40-move PGN from a file in under 2 seconds.
+- Loads a PGN from clipboard correctly.
+- Loads a PGN from a Lichess study URL correctly.
+- Tapping any move jumps to that position.
+- Arrow keys step forward and backward through moves.
+- Swipe gestures step forward and backward.
+- Best-move arrow is drawn correctly for every analyzed position.
+- Evaluation bar updates correctly for every position.
+- Top 3 moves are displayed with evaluations.
+- Engine lines are interactive — tapping a line plays it as a variation.
+- User-created variations are saved and displayed.
+- Move classifications appear for every move.
+- Tapping a classification shows the explanation.
+- Accuracy percentage is calculated and displayed.
+- Critical moments are identified and viewable.
+- Opening name and ECO code are identified.
+- Game phase indicator updates correctly.
+- Tactical alerts appear when applicable.
+- Copy FEN works for any position.
+- Export PGN preserves all moves with engine annotations and classifications.
+- Share analysis image generates a correct PNG.
+- Undo allows taking back moves and trying alternatives.
+
+Screenshot Analyzer:
+- Share sheet from Chess.com opens Chess Forge with the screenshot loaded.
+- Gallery picker loads any image.
+- File picker loads any image.
+- Board is auto-detected on standard themes (YOLO method).
+- Board detection falls back to line detection when YOLO fails.
+- Board detection falls back to color segmentation when line detection fails.
+- Manual crop is always available as a final fallback.
+- Manual crop adjustment works.
+- Confidence ≥ 0.90 shows analysis directly.
+- Confidence 0.75–0.89 shows confirmation step.
+- Confidence < 0.75 is rejected with a clear message.
+- FEN validation catches impossible positions.
+- Arrow is drawn correctly for every confirmed position.
+- Castling/en passant warning appears when applicable.
+- Batch processing handles multiple screenshots.
+- Batch processing links consecutive screenshots into a game when possible.
+- "Generate Puzzle" button appears when tactics are detected.
+
+Live Overlay:
+- MediaProjection permission flow completes successfully.
+- SYSTEM_ALERT_WINDOW permission flow completes successfully.
+- Board region selector works.
+- Overlay draws the best-move arrow in the correct position.
+- Arrow updates within 600 ms of a stable move.
+- Arrow respects board orientation (black at bottom).
+- Arrow respects special cases (capture, check, castling, en passant, promotion).
+- Arrow colors change per move type (if enabled).
+- Arrow fades in and out smoothly.
+- Arrow does not intercept touches — the underlying app remains interactive.
+- Turn detection correctly identifies which side moved.
+- Arrow only shows for the side to move.
+- Turn indicator displays correctly.
+- Incremental processing only re-classifies changed squares.
+- Battery kill switch pauses capture after 5s of inactivity.
+- Capture resumes on board change.
+- Capture pauses on screen off.
+- Capture resumes on screen on.
+- Competitive app warning toast appears for Chess.com / Lichess / Chess24.
+- Minimize button collapses the overlay to a bubble.
+- Stop button in the notification stops everything cleanly.
+- Post-game analysis offers to reconstruct the game.
+- Reconstructed game loads into Practice Mode with classifications.
+- Mid-game overlay start shows appropriate warning.
+
+Puzzle Mode:
+- Puzzles are generated from missed tactics in user games.
+- Puzzles are generated from screenshot positions.
+- Puzzles are generated from arbitrary positions.
+- Puzzle flow works: move → response → completion.
+- Incorrect moves are rejected with shake animation.
+- Hints appear after 3 failed attempts.
+- Puzzle rating updates after each puzzle.
+- Daily puzzle appears on the widget.
+- Puzzle statistics are tracked and displayed.
+- Rating history graph renders correctly.
+
+Settings:
+- All engine presets work.
+- Custom depth and movetime sliders work.
+- Classification thresholds are adjustable and applied.
+- All board themes apply immediately.
+- All overlay customizations apply immediately.
+- Per-move-type arrow colors work.
+- Profiles can be created, edited, and switched.
+- Backup exports all data as `.forgebackup`.
+- Restore imports from backup correctly.
+- Data deletion clears history, settings, and puzzle progress.
+
+History:
+- Every analysis is saved.
+- History entries open in the correct mode.
+- History is searchable by FEN, date, opening, and move.
+- History is filterable by mode, date, and evaluation.
+- Analysis sessions are grouped.
+- History can be deleted per-entry, by filter, or all at once.
+
+Onboarding:
+- Three intro screens appear on first launch.
+- Ethics disclaimer appears after intro screens.
+- "I Understand" button is required to proceed.
+- Permissions walkthrough appears after ethics disclaimer.
+- Onboarding does not appear again after completion unless the ethics text changes.
+
+Accessibility:
+- TalkBack navigates all screens.
+- Board is navigable via TalkBack with spoken square names.
+- Color-blind mode uses patterns in addition to colors.
+- Reduced motion disables all animations.
+- Font scaling applies throughout the app.
+- One-handed mode moves controls to the bottom.
+
+Error handling:
+- All error cases in Section 12 are handled gracefully.
+- No crash occurs under any of those conditions.
+- User is always told what went wrong and what to do next.
+
+Widgets and Shortcuts:
+- App shortcuts appear on long-press.
+- Each shortcut opens the correct mode.
+- Widget displays daily puzzle.
+- Widget displays last analysis.
+- Widget is interactive and opens the correct screen.

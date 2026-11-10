@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">Chess Forge</string>
+    <string name="title_practice">Practice</string>
+    <string name="title_screenshot">Screenshot</string>
+    <string name="title_overlay">Live Overlay</string>
+    <string name="title_puzzles">Puzzles</string>
+    <string name="title_history">History</string>
+    <string name="title_settings">Settings</string>
+    <string name="stop_overlay">Stop Overlay</string>
+    <string name="overlay_service_desc">Chess Forge live board analysis overlay</string>
+</resources>

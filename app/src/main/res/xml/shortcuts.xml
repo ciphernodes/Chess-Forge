@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="shortcut_screenshot"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/title_screenshot">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.aistudio.chessforge.qxzkv"
+            android:targetClass="com.example.MainActivity">
+            <extra android:name="SHORTCUT_DESTINATION" android:value="SCREENSHOT" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="shortcut_overlay"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/title_overlay">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.aistudio.chessforge.qxzkv"
+            android:targetClass="com.example.MainActivity">
+            <extra android:name="SHORTCUT_DESTINATION" android:value="OVERLAY" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="shortcut_puzzle"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/title_puzzles">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.aistudio.chessforge.qxzkv"
+            android:targetClass="com.example.MainActivity">
+            <extra android:name="SHORTCUT_DESTINATION" android:value="PUZZLES" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="shortcut_history"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/title_history">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.aistudio.chessforge.qxzkv"
+            android:targetClass="com.example.MainActivity">
+            <extra android:name="SHORTCUT_DESTINATION" android:value="HISTORY" />
+        </intent>
+    </shortcut>
+</shortcuts>

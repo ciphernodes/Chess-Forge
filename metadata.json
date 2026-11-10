@@ -1,0 +1,6 @@
+{
+  "name": "Chess Forge",
+  "description": "Android chess analysis and training app with Practice Mode, Screenshot Analyzer, Live Overlay, and Puzzle Mode.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
