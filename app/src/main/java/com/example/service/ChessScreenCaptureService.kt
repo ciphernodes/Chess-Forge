@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -22,9 +23,12 @@ import com.example.MainActivity
 import com.example.R
 import com.example.core.chess.ChessEngine
 import com.example.core.chess.ChessPosition
+import com.example.core.chess.EnginePreset
 import com.example.core.chess.Move
+import com.example.core.chess.PieceColor
 import com.example.core.vision.ChessVisionPipeline
 import com.example.data.repository.SettingsRepository
+import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -43,6 +47,10 @@ data class CaptureAnalysisResult(
     val evalCp: Int,
     val evalDisplay: String,
     val isWhiteAtBottom: Boolean,
+    val playerColor: PieceColor,
+    val isPlayerTurn: Boolean,
+    val activeColor: PieceColor,
+    val statusMessage: String,
     val timestamp: Long = System.currentTimeMillis()
 )
 
@@ -59,7 +67,10 @@ class ChessScreenCaptureService : Service() {
     private lateinit var settingsRepository: SettingsRepository
 
     private var loopJob: Job? = null
-    private var lastScannedFen: String? = null
+    private var engineJob: Job? = null
+    private var lastAnalyzedFen: String? = null
+    private var previousScannedPosition: ChessPosition? = null
+    private var lastFrameSignature = IntArray(64)
 
     companion object {
         const val ACTION_START = "ACTION_START_CAPTURE"
@@ -110,7 +121,7 @@ class ChessScreenCaptureService : Service() {
             }
             ACTION_CAPTURE_NOW -> {
                 serviceScope.launch {
-                    performCalibratedRegionScan()
+                    performCalibratedRegionScan(forceScan = true)
                 }
             }
             ACTION_START -> {
@@ -204,9 +215,9 @@ class ChessScreenCaptureService : Service() {
 
     /**
      * Grabs the current frame, crops specifically to the calibrated board region,
-     * and analyzes with vision pipeline + Stockfish.
+     * checks for position changes, detects player color automatically, and analyzes with Stockfish.
      */
-    suspend fun performCalibratedRegionScan(): Boolean = withContext(Dispatchers.Default) {
+    suspend fun performCalibratedRegionScan(forceScan: Boolean = false): Boolean = withContext(Dispatchers.Default) {
         val reader = imageReader ?: return@withContext false
         val image = reader.acquireLatestImage() ?: return@withContext false
 
@@ -238,30 +249,69 @@ class ChessScreenCaptureService : Service() {
 
             val croppedBoard = Bitmap.createBitmap(fullBitmap, left, top, w, h)
 
-            // 3. Process the cropped board
-            val isFlipped = settingsRepository.settings.value.isBoardFlipped
-            val visionResult = visionPipeline.processCroppedBoard(croppedBoard, isFlipped)
+            // 3. Fast board signature: If the board hasn't changed since last frame, skip re-evaluating!
+            val currentSig = computeBoardSignature(croppedBoard)
+            if (!forceScan && isBoardSignatureSimilar(currentSig, lastFrameSignature) && latestAnalysisResult.value != null) {
+                return@withContext true
+            }
+
+            // 4. Process the cropped board with auto player color detection
+            val currentSettings = settingsRepository.settings.value
+            val visionResult = visionPipeline.processCroppedBoard(
+                croppedBoard = croppedBoard,
+                isBoardFlipped = currentSettings.isBoardFlipped,
+                colorOverride = currentSettings.playerColorOverride,
+                previousPosition = previousScannedPosition
+            )
             val pos = visionResult.position
 
             val pieceCount = pos.board.count { it != null }
             if (pieceCount >= 4) {
                 val newFen = pos.toFen()
-                lastScannedFen = newFen
-
-                val res = engine.analyze(pos, settingsRepository.settings.value.enginePreset)
-                if (res.bestMove != null) {
-                    val analysis = CaptureAnalysisResult(
-                        position = pos,
-                        bestMove = res.bestMove,
-                        bestMoveSan = res.bestMoveSan,
-                        evalCp = res.evaluationCp,
-                        evalDisplay = res.displayScore,
-                        isWhiteAtBottom = visionResult.isWhiteAtBottom
-                    )
-                    latestAnalysisResult.value = analysis
-                    _scanStatusMessage.value = "Scanned: ${res.bestMoveSan} (${res.displayScore})"
+                if (!forceScan && newFen == lastAnalyzedFen && latestAnalysisResult.value != null) {
+                    lastFrameSignature = currentSig
                     return@withContext true
                 }
+
+                lastFrameSignature = currentSig
+                lastAnalyzedFen = newFen
+                previousScannedPosition = pos
+
+                // Cancel any previous running engine search immediately so new move is computed with zero delay
+                engineJob?.cancel()
+                val job = serviceScope.launch {
+                    val preset = currentSettings.enginePreset
+                    val res = engine.analyze(
+                        position = pos,
+                        preset = EnginePreset.FAST, // Real-time fast evaluation (<250ms)
+                        customDepth = 12,
+                        customMovetimeMs = 250L
+                    )
+                    if (res.bestMove != null) {
+                        val status = if (visionResult.isPlayerTurn) {
+                            "Best: ${res.bestMoveSan} (${res.displayScore})"
+                        } else {
+                            "Opponent to move (${res.bestMoveSan})"
+                        }
+
+                        val analysis = CaptureAnalysisResult(
+                            position = pos,
+                            bestMove = res.bestMove,
+                            bestMoveSan = res.bestMoveSan,
+                            evalCp = res.evaluationCp,
+                            evalDisplay = res.displayScore,
+                            isWhiteAtBottom = visionResult.isWhiteAtBottom,
+                            playerColor = visionResult.playerColor,
+                            isPlayerTurn = visionResult.isPlayerTurn,
+                            activeColor = pos.activeColor,
+                            statusMessage = status
+                        )
+                        latestAnalysisResult.value = analysis
+                        _scanStatusMessage.value = status
+                    }
+                }
+                engineJob = job
+                return@withContext true
             } else {
                 _scanStatusMessage.value = "Align board region (tap 📐 Board)"
             }
@@ -274,19 +324,49 @@ class ChessScreenCaptureService : Service() {
         return@withContext false
     }
 
+    private fun computeBoardSignature(bitmap: Bitmap): IntArray {
+        val sig = IntArray(64)
+        val sqW = bitmap.width / 8
+        val sqH = bitmap.height / 8
+        if (sqW < 2 || sqH < 2) return sig
+
+        for (r in 0..7) {
+            for (c in 0..7) {
+                val cx = (c * sqW + sqW / 2).coerceIn(0, bitmap.width - 1)
+                val cy = (r * sqH + sqH / 2).coerceIn(0, bitmap.height - 1)
+                sig[r * 8 + c] = bitmap.getPixel(cx, cy)
+            }
+        }
+        return sig
+    }
+
+    private fun isBoardSignatureSimilar(sigA: IntArray, sigB: IntArray): Boolean {
+        var diffCount = 0
+        for (i in 0 until 64) {
+            val a = sigA[i]
+            val b = sigB[i]
+            val dr = abs(Color.red(a) - Color.red(b))
+            val dg = abs(Color.green(a) - Color.green(b))
+            val db = abs(Color.blue(a) - Color.blue(b))
+            if (dr + dg + db > 40) {
+                diffCount++
+                if (diffCount > 1) return false
+            }
+        }
+        return true
+    }
+
     private fun startAutoCaptureLoop() {
         loopJob?.cancel()
         loopJob = serviceScope.launch {
-            val fps = settingsRepository.settings.value.overlayFps.coerceIn(1, 10)
-            val delayMs = 1000L / fps
-
+            // Real-time continuous scanning loop: checks board frame at 4 FPS
             while (true) {
                 if (isCapturing && imageReader != null) {
                     try {
-                        performCalibratedRegionScan()
+                        performCalibratedRegionScan(forceScan = false)
                     } catch (_: Exception) {}
                 }
-                delay(delayMs)
+                delay(250)
             }
         }
     }
@@ -295,6 +375,7 @@ class ChessScreenCaptureService : Service() {
         super.onDestroy()
         isCapturing = false
         loopJob?.cancel()
+        engineJob?.cancel()
         serviceScope.cancel()
 
         virtualDisplay?.release()

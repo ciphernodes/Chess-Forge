@@ -19,6 +19,8 @@ data class VisionResult(
     val fen: String,
     val overallConfidence: Float,
     val isWhiteAtBottom: Boolean,
+    val playerColor: PieceColor = if (isWhiteAtBottom) PieceColor.WHITE else PieceColor.BLACK,
+    val isPlayerTurn: Boolean = true,
     val squareConfidences: FloatArray, // 64 values
     val validationPassed: Boolean,
     val validationErrors: List<String>,
@@ -67,93 +69,35 @@ class ChessVisionPipeline {
             }
         }
 
-        // Step 2 & 3: Crop and slice into 64 squares
         val croppedBoard = cropAndScaleBoard(bitmap, boardRect)
-        val squareWidth = croppedBoard.width / 8
-        val squareHeight = croppedBoard.height / 8
-
-        val squareConfidences = FloatArray(64)
-        val boardPieces = arrayOfNulls<Piece>(64)
-
-        // Step 4 & 5: Piece classification + Ensemble inference
-        for (rank in 0..7) {
-            for (file in 0..7) {
-                val index = rank * 8 + file
-                val sqX = (file * squareWidth).coerceIn(0, croppedBoard.width - squareWidth)
-                val sqY = ((7 - rank) * squareHeight).coerceIn(0, croppedBoard.height - squareHeight)
-
-                val sqBmp = Bitmap.createBitmap(croppedBoard, sqX, sqY, squareWidth, squareHeight)
-
-                // Ensemble: original + contrast-enhanced
-                val resOriginal = classifySquare(sqBmp)
-                val enhancedBmp = enhanceContrast(sqBmp)
-                val resEnhanced = classifySquare(enhancedBmp)
-
-                val finalPiece = if (resOriginal.confidence >= resEnhanced.confidence) resOriginal.piece else resEnhanced.piece
-                val avgConfidence = (resOriginal.confidence + resEnhanced.confidence) / 2f
-
-                boardPieces[index] = finalPiece
-                squareConfidences[index] = avgConfidence
-            }
-        }
-
-        // Step 7: Orientation detection (rank 2 pawns = white, rank 7 = black)
-        val isWhiteAtBottom = detectOrientation(boardPieces)
-        if (!isWhiteAtBottom) {
-            // Flip board pieces array if black is at bottom
-            flipBoardOrientation(boardPieces, squareConfidences)
-        }
-
-        // Assemble position
-        val position = ChessPosition(
-            board = boardPieces,
-            activeColor = PieceColor.WHITE,
-            castlingRights = "KQkq",
-            enPassantSquare = null
-        )
-
-        // Step 6 & 10: FEN Validation layer (Section 3.3b)
-        val validation = validatePosition(position)
-        var overallConf = squareConfidences.minOrNull() ?: 0.5f
-
-        if (!validation.isValid) {
-            overallConf = min(overallConf, 0.74f) // Cap confidence at 0.74 if validation fails
-        }
-
-        val requiresConfirmation = overallConf in 0.75f..0.89f
-        val isRejected = overallConf < 0.60f
-
-        VisionResult(
-            position = position,
-            fen = position.toFen(),
-            overallConfidence = overallConf,
-            isWhiteAtBottom = isWhiteAtBottom,
-            squareConfidences = squareConfidences,
-            validationPassed = validation.isValid,
-            validationErrors = validation.errors,
-            failingSquares = validation.failingSquares,
+        val result = processCroppedBoard(croppedBoard)
+        result.copy(
             detectionMethodUsed = detectionMethod,
-            boardRect = boardRect,
-            requiresConfirmation = requiresConfirmation,
-            isRejected = isRejected
+            boardRect = boardRect
         )
     }
 
     suspend fun processCroppedBoard(
         croppedBoard: Bitmap,
-        isBoardFlipped: Boolean = false
+        isBoardFlipped: Boolean = false,
+        colorOverride: String = "AUTO",
+        previousPosition: ChessPosition? = null
     ): VisionResult = withContext(Dispatchers.Default) {
         val squareWidth = croppedBoard.width / 8
         val squareHeight = croppedBoard.height / 8
 
-        val squareConfidences = FloatArray(64)
-        val boardPieces = arrayOfNulls<Piece>(64)
+        val rawPieces = arrayOfNulls<Piece>(64)
+        val rawConfidences = FloatArray(64)
+        val rawHighlighted = BooleanArray(64)
 
-        for (rank in 0..7) {
-            for (file in 0..7) {
-                val index = rank * 8 + file
-                val sqX = (file * squareWidth).coerceIn(0, croppedBoard.width - squareWidth)
-                val sqY = ((7 - rank) * squareHeight).coerceIn(0, croppedBoard.height - squareHeight)
+        // 1. Classify each of the 64 squares as seen on the screen
+        // r = 0 (top row of screen/board), r = 7 (bottom row of screen/board)
+        // c = 0 (left column of screen/board), c = 7 (right column of screen/board)
+        for (r in 0..7) {
+            for (c in 0..7) {
+                val screenIndex = r * 8 + c
+                val sqX = (c * squareWidth).coerceIn(0, croppedBoard.width - squareWidth)
+                val sqY = (r * squareHeight).coerceIn(0, croppedBoard.height - squareHeight)
 
                 val sqBmp = Bitmap.createBitmap(croppedBoard, sqX, sqY, squareWidth, squareHeight)
 
@@ -164,19 +108,91 @@ class ChessVisionPipeline {
                 val finalPiece = if (resOriginal.confidence >= resEnhanced.confidence) resOriginal.piece else resEnhanced.piece
                 val avgConfidence = (resOriginal.confidence + resEnhanced.confidence) / 2f
 
-                boardPieces[index] = finalPiece
-                squareConfidences[index] = avgConfidence
+                rawPieces[screenIndex] = finalPiece
+                rawConfidences[screenIndex] = avgConfidence
+                rawHighlighted[screenIndex] = resOriginal.isHighlighted || resEnhanced.isHighlighted
             }
         }
 
-        val isWhiteAtBottom = if (isBoardFlipped) false else detectOrientation(boardPieces)
-        if (!isWhiteAtBottom) {
-            flipBoardOrientation(boardPieces, squareConfidences)
+        // 2. Automatically detect which color the player is (ChessMint-style)
+        // In Chess.com / Lichess, the user playing the game is ALWAYS placed at the bottom of the screen!
+        val isWhiteAtBottom = when (colorOverride.uppercase()) {
+            "WHITE" -> true
+            "BLACK" -> false
+            else -> {
+                if (isBoardFlipped) {
+                    false
+                } else {
+                    detectPlayerColorFromScreen(rawPieces)
+                }
+            }
         }
+        val playerColor = if (isWhiteAtBottom) PieceColor.WHITE else PieceColor.BLACK
+
+        // 3. Map screen coordinates (r, c) to chess board coordinates (file, rank)
+        val boardPieces = arrayOfNulls<Piece>(64)
+        val squareConfidences = FloatArray(64)
+
+        for (r in 0..7) {
+            for (c in 0..7) {
+                val screenIndex = r * 8 + c
+                val p = rawPieces[screenIndex]
+                val conf = rawConfidences[screenIndex]
+
+                val file = if (isWhiteAtBottom) c else 7 - c
+                val rank = if (isWhiteAtBottom) 7 - r else r
+
+                val boardIndex = rank * 8 + file
+                boardPieces[boardIndex] = p
+                squareConfidences[boardIndex] = conf
+            }
+        }
+
+        // 4. King count repair (ensures exactly 1 White King and 1 Black King exist)
+        ensureKingsExist(boardPieces)
+
+        // 5. Detect whose turn it is (Active Color)
+        var activeColor = playerColor // Default: show move for player
+
+        // 5a. Highlight detection: Did Chess.com or Lichess highlight the last move?
+        var lastMovedPieceColor: PieceColor? = null
+        for (r in 0..7) {
+            for (c in 0..7) {
+                val screenIndex = r * 8 + c
+                if (rawHighlighted[screenIndex]) {
+                    val p = rawPieces[screenIndex]
+                    if (p != null) {
+                        lastMovedPieceColor = p.color
+                    }
+                }
+            }
+        }
+        if (lastMovedPieceColor != null) {
+            // If White just moved, it's now Black's turn! If Black just moved, it's White's turn!
+            activeColor = lastMovedPieceColor.opposite()
+        }
+
+        // 5b. Frame diff with previous position:
+        if (lastMovedPieceColor == null && previousPosition != null) {
+            val movedColor = detectMovedPieceColor(previousPosition.board, boardPieces)
+            if (movedColor != null) {
+                activeColor = movedColor.opposite()
+            }
+        }
+
+        // 5c. King check override:
+        val tempPos = ChessPosition(board = boardPieces, activeColor = activeColor)
+        if (tempPos.isKingInCheck(PieceColor.WHITE) && !tempPos.isKingInCheck(PieceColor.BLACK)) {
+            activeColor = PieceColor.WHITE
+        } else if (tempPos.isKingInCheck(PieceColor.BLACK) && !tempPos.isKingInCheck(PieceColor.WHITE)) {
+            activeColor = PieceColor.BLACK
+        }
+
+        val isPlayerTurn = (activeColor == playerColor)
 
         val position = ChessPosition(
             board = boardPieces,
-            activeColor = PieceColor.WHITE,
+            activeColor = activeColor,
             castlingRights = "KQkq",
             enPassantSquare = null
         )
@@ -192,33 +208,40 @@ class ChessVisionPipeline {
             fen = position.toFen(),
             overallConfidence = overallConf,
             isWhiteAtBottom = isWhiteAtBottom,
+            playerColor = playerColor,
+            isPlayerTurn = isPlayerTurn,
             squareConfidences = squareConfidences,
             validationPassed = validation.isValid,
             validationErrors = validation.errors,
             failingSquares = validation.failingSquares,
-            detectionMethodUsed = "Calibrated Board Crop",
+            detectionMethodUsed = "Real-time Auto-Calibrated Vision",
             boardRect = RectF(0f, 0f, croppedBoard.width.toFloat(), croppedBoard.height.toFloat()),
             requiresConfirmation = overallConf in 0.75f..0.89f,
             isRejected = overallConf < 0.60f
         )
     }
 
-    private data class ClassifyResult(val piece: Piece?, val confidence: Float)
+    private data class ClassifyResult(val piece: Piece?, val confidence: Float, val isHighlighted: Boolean = false)
 
     private fun classifySquare(sqBmp: Bitmap): ClassifyResult {
         val w = sqBmp.width
         val h = sqBmp.height
-        if (w < 6 || h < 6) return ClassifyResult(null, 0.9f)
+        if (w < 6 || h < 6) return ClassifyResult(null, 0.9f, false)
 
         // 1. Sample background square color from the 4 corners (away from pieces)
         val c1 = sqBmp.getPixel(2, 2)
         val c2 = sqBmp.getPixel(w - 3, 2)
         val c3 = sqBmp.getPixel(2, h - 3)
         val c4 = sqBmp.getPixel(w - 3, h - 3)
-        val bgLum = ((0.299 * Color.red(c1) + 0.587 * Color.green(c1) + 0.114 * Color.blue(c1)) +
-                (0.299 * Color.red(c2) + 0.587 * Color.green(c2) + 0.114 * Color.blue(c2)) +
-                (0.299 * Color.red(c3) + 0.587 * Color.green(c3) + 0.114 * Color.blue(c3)) +
-                (0.299 * Color.red(c4) + 0.587 * Color.green(c4) + 0.114 * Color.blue(c4))) / 4.0
+
+        val avgR = (Color.red(c1) + Color.red(c2) + Color.red(c3) + Color.red(c4)) / 4
+        val avgG = (Color.green(c1) + Color.green(c2) + Color.green(c3) + Color.green(c4)) / 4
+        val avgB = (Color.blue(c1) + Color.blue(c2) + Color.blue(c3) + Color.blue(c4)) / 4
+
+        val bgLum = (0.299 * avgR + 0.587 * avgG + 0.114 * avgB)
+
+        // Check for Chess.com yellow-olive move highlight: (#baca44 / #f7f769)
+        val isYellowHighlight = (avgR > 140 && avgG > 140 && avgB < 140 && (avgR - avgB) > 35 && (avgG - avgB) > 35)
 
         // 2. Scan central piece area (from 15% to 85%)
         val startX = (w * 0.15f).toInt()
@@ -241,7 +264,7 @@ class ChessVisionPipeline {
                 total++
 
                 // Pixel differs noticeably from square background color
-                if (abs(lum - bgLum) > 30) {
+                if (abs(lum - bgLum) > 28) {
                     piecePixels++
                     if (lum > 140) {
                         whitePixels++
@@ -256,7 +279,7 @@ class ChessVisionPipeline {
 
         // If piece coverage is very low, the square is empty
         if (pieceCoverage < 0.10f) {
-            return ClassifyResult(null, 0.96f)
+            return ClassifyResult(null, 0.96f, isYellowHighlight)
         }
 
         // Color determination: white if white pixels dominate, black if dark pixels dominate
@@ -274,7 +297,7 @@ class ChessVisionPipeline {
         }
 
         val conf = (0.80f + min(0.18f, pieceCoverage)).coerceIn(0.70f, 0.98f)
-        return ClassifyResult(Piece(type, color), conf)
+        return ClassifyResult(Piece(type, color), conf, isYellowHighlight)
     }
 
     private fun enhanceContrast(src: Bitmap): Bitmap {
@@ -296,26 +319,97 @@ class ChessVisionPipeline {
         return out
     }
 
-    private fun detectOrientation(pieces: Array<Piece?>): Boolean {
-        var rank2WhitePawns = 0
-        var rank7BlackPawns = 0
+    /**
+     * Automatic Player Color Detection (ChessMint-style):
+     * Evaluates piece types, kings, and pawn formations to determine whether
+     * the player is White (White at bottom) or Black (Black at bottom).
+     */
+    private fun detectPlayerColorFromScreen(rawPieces: Array<Piece?>): Boolean {
+        var whiteScore = 0f
 
-        for (f in 0..7) {
-            val pRank2 = pieces[1 * 8 + f]
-            if (pRank2?.type == PieceType.PAWN && pRank2.color == PieceColor.WHITE) rank2WhitePawns++
+        for (r in 0..7) {
+            for (c in 0..7) {
+                val p = rawPieces[r * 8 + c] ?: continue
+                val weight = (r - 3.5f) // negative for top half (r <= 3), positive for bottom half (r >= 4)
 
-            val pRank7 = pieces[6 * 8 + f]
-            if (pRank7?.type == PieceType.PAWN && pRank7.color == PieceColor.BLACK) rank7BlackPawns++
+                // 1. King locations are the strongest indicator of home side
+                if (p.type == PieceType.KING) {
+                    val kingWeight = 25f
+                    if (p.color == PieceColor.WHITE) {
+                        whiteScore += if (r >= 4) kingWeight else -kingWeight
+                    } else {
+                        whiteScore += if (r <= 3) kingWeight else -kingWeight
+                    }
+                }
+
+                // 2. Pawns on 2nd row from bottom (r=6) vs 2nd row from top (r=1)
+                if (p.type == PieceType.PAWN) {
+                    if (r == 6) {
+                        if (p.color == PieceColor.WHITE) whiteScore += 10f else whiteScore -= 10f
+                    } else if (r == 1) {
+                        if (p.color == PieceColor.BLACK) whiteScore += 10f else whiteScore -= 10f
+                    }
+                }
+
+                // 3. Back rank pieces (r=7 bottom vs r=0 top)
+                if (r == 7) {
+                    if (p.color == PieceColor.WHITE) whiteScore += 4f else whiteScore -= 4f
+                } else if (r == 0) {
+                    if (p.color == PieceColor.BLACK) whiteScore += 4f else whiteScore -= 4f
+                }
+
+                // 4. Overall piece distribution
+                if (p.color == PieceColor.WHITE) {
+                    whiteScore += weight * 1.2f
+                } else {
+                    whiteScore -= weight * 1.2f
+                }
+            }
         }
-        return (rank2WhitePawns + rank7BlackPawns) >= 2
+        return whiteScore >= 0f
     }
 
-    private fun flipBoardOrientation(pieces: Array<Piece?>, confidences: FloatArray) {
-        val copy = pieces.copyOf()
-        val confCopy = confidences.copyOf()
+    private fun detectMovedPieceColor(prevBoard: Array<Piece?>, currBoard: Array<Piece?>): PieceColor? {
+        // Find square that had a piece and is now empty
         for (i in 0 until 64) {
-            pieces[i] = copy[63 - i]
-            confidences[i] = confCopy[63 - i]
+            val pPrev = prevBoard[i]
+            val pCurr = currBoard[i]
+            if (pPrev != null && pCurr == null) {
+                return pPrev.color
+            }
+        }
+        return null
+    }
+
+    private fun ensureKingsExist(board: Array<Piece?>) {
+        var whiteKingIndex = -1
+        var blackKingIndex = -1
+
+        for (i in 0 until 64) {
+            val p = board[i] ?: continue
+            if (p.type == PieceType.KING) {
+                if (p.color == PieceColor.WHITE) {
+                    if (whiteKingIndex == -1) whiteKingIndex = i else board[i] = Piece(PieceType.QUEEN, PieceColor.WHITE)
+                } else {
+                    if (blackKingIndex == -1) blackKingIndex = i else board[i] = Piece(PieceType.QUEEN, PieceColor.BLACK)
+                }
+            }
+        }
+
+        // If missing White King, promote the best piece on White's side
+        if (whiteKingIndex == -1) {
+            val candidate = (0..31).firstOrNull { board[it]?.color == PieceColor.WHITE }
+                ?: (32..63).firstOrNull { board[it]?.color == PieceColor.WHITE }
+                ?: 4 // e1
+            board[candidate] = Piece(PieceType.KING, PieceColor.WHITE)
+        }
+
+        // If missing Black King, promote the best piece on Black's side
+        if (blackKingIndex == -1) {
+            val candidate = (63 downTo 32).firstOrNull { board[it]?.color == PieceColor.BLACK }
+                ?: (31 downTo 0).firstOrNull { board[it]?.color == PieceColor.BLACK }
+                ?: 60 // e8
+            board[candidate] = Piece(PieceType.KING, PieceColor.BLACK)
         }
     }
 

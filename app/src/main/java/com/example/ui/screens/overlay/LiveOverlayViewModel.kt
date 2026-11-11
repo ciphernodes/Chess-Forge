@@ -256,6 +256,26 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
         _uiState.value = _uiState.value.copy(settings = s)
     }
 
+    fun updatePlayerColorMode(mode: String) {
+        val s = _uiState.value.settings.copy(
+            playerColorOverride = mode,
+            isBoardFlipped = (mode == "BLACK")
+        )
+        settingsRepository.updateSettings(s)
+        _uiState.value = _uiState.value.copy(settings = s)
+        val context = getApplication<Application>()
+        com.example.service.ChessScreenCaptureService.requestScan(context)
+    }
+
+    fun toggleAutoDetectPlayerColor(auto: Boolean) {
+        val s = _uiState.value.settings.copy(
+            autoDetectPlayerColor = auto,
+            playerColorOverride = if (auto) "AUTO" else _uiState.value.settings.playerColorOverride
+        )
+        settingsRepository.updateSettings(s)
+        _uiState.value = _uiState.value.copy(settings = s)
+    }
+
     fun triggerManualScan() {
         val context = getApplication<Application>()
         com.example.service.ChessScreenCaptureService.requestScan(context)

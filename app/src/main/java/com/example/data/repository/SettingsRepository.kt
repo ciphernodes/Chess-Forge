@@ -75,6 +75,8 @@ data class UserSettings(
     val isWatchingMode: Boolean = false, // false = playing mode, true = watching mode
     val alwaysPromptCalibration: Boolean = true, // Prompt to set board position when launching overlay
     val isBoardFlipped: Boolean = false, // Black at bottom
+    val autoDetectPlayerColor: Boolean = true, // Automatically detect if player is White or Black (ChessMint-style)
+    val playerColorOverride: String = "AUTO", // "AUTO", "WHITE", "BLACK"
 
     // Active Profile
     val activeProfileName: String = "Study",
@@ -134,6 +136,8 @@ class SettingsRepository(private val context: Context) {
             isWatchingMode = prefs.getBoolean("isWatchingMode", false),
             alwaysPromptCalibration = prefs.getBoolean("alwaysPromptCalibration", true),
             isBoardFlipped = prefs.getBoolean("isBoardFlipped", false),
+            autoDetectPlayerColor = prefs.getBoolean("autoDetectPlayerColor", true),
+            playerColorOverride = prefs.getString("playerColorOverride", "AUTO") ?: "AUTO",
             activeProfileName = prefs.getString("activeProfileName", "Study") ?: "Study",
             puzzleRating = prefs.getInt("puzzleRating", 1200),
             puzzlesSolved = prefs.getInt("puzzlesSolved", 0),
@@ -174,6 +178,8 @@ class SettingsRepository(private val context: Context) {
             putBoolean("isWatchingMode", newSettings.isWatchingMode)
             putBoolean("alwaysPromptCalibration", newSettings.alwaysPromptCalibration)
             putBoolean("isBoardFlipped", newSettings.isBoardFlipped)
+            putBoolean("autoDetectPlayerColor", newSettings.autoDetectPlayerColor)
+            putString("playerColorOverride", newSettings.playerColorOverride)
             putString("activeProfileName", newSettings.activeProfileName)
             putInt("puzzleRating", newSettings.puzzleRating)
             putInt("puzzlesSolved", newSettings.puzzlesSolved)

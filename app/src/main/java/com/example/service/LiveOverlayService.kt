@@ -41,6 +41,7 @@ import com.example.core.chess.ChessPosition
 import com.example.core.chess.EnginePreset
 import com.example.core.chess.GameReconstructor
 import com.example.core.chess.Move
+import com.example.core.chess.PieceColor
 import com.example.core.chess.Square
 import com.example.data.repository.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
@@ -73,9 +74,14 @@ class LiveOverlayService : Service() {
     private var currentBestMoveSan: String = "e4"
     private var currentEvalCp: Int = 35
     private var currentEvalDisplay: String = "+0.35"
+    private var isWhiteAtBottom: Boolean = true
+    private var playerColor: PieceColor = PieceColor.WHITE
+    private var isPlayerTurn: Boolean = true
     private var isBoardFlipped: Boolean = false
 
     // HUD View References
+    private var hudColorBadge: TextView? = null
+    private var hudTurnBadge: TextView? = null
     private var hudEvalBadge: TextView? = null
     private var hudMoveText: TextView? = null
 
@@ -110,9 +116,12 @@ class LiveOverlayService : Service() {
                     currentBestMoveSan = result.bestMoveSan
                     currentEvalCp = result.evalCp
                     currentEvalDisplay = result.evalDisplay
+                    isWhiteAtBottom = result.isWhiteAtBottom
+                    playerColor = result.playerColor
+                    isPlayerTurn = result.isPlayerTurn
                     isBoardFlipped = !result.isWhiteAtBottom
 
-                    updateHudWithResult(result.bestMoveSan, result.evalDisplay)
+                    updateHudWithResult(result)
                     arrowWindowView?.invalidate()
                 }
             }
@@ -605,7 +614,14 @@ class LiveOverlayService : Service() {
                 val targetX = endX - (cos(angle) * headSize * 0.35f)
                 val targetY = endY - (sin(angle) * headSize * 0.35f)
 
-                val arrowColor = settingsRepository.settings.value.arrowBaseColor.hex.toInt()
+                val isCapture = move.isCapture || currentPosition.get(move.to) != null
+                val isCheck = currentBestMoveSan.contains("+") || currentBestMoveSan.contains("#")
+                val arrowColor = when {
+                    !isPlayerTurn -> Color.parseColor("#FF9100") // Distinct amber threat/anticipation for opponent
+                    isCheck -> settingsRepository.settings.value.arrowCheckColor.toInt()
+                    isCapture -> settingsRepository.settings.value.arrowCaptureColor.toInt()
+                    else -> settingsRepository.settings.value.arrowBaseColor.hex.toInt()
+                }
                 val opacity = (settingsRepository.settings.value.arrowOpacity * 255).toInt().coerceIn(60, 255)
 
                 // 1. Source square luminous highlight
@@ -650,7 +666,12 @@ class LiveOverlayService : Service() {
                 // 5. Move & Eval tag
                 val midX = (startX + endX) / 2f
                 val midY = (startY + endY) / 2f - (sqH * 0.25f)
-                val tagText = "${currentBestMoveSan.ifEmpty { "${move.from}→${move.to}" }} ($currentEvalDisplay)"
+                val prefix = if (isPlayerTurn) {
+                    if (playerColor == PieceColor.WHITE) "⚪" else "⚫"
+                } else {
+                    "⏳ Opp:"
+                }
+                val tagText = "$prefix ${currentBestMoveSan.ifEmpty { "${move.from}→${move.to}" }} ($currentEvalDisplay)"
                 val textW = tagTextPaint.measureText(tagText)
                 val tagRect = RectF(midX - textW / 2f - 16f, midY - 24f, midX + textW / 2f + 16f, midY + 18f)
                 canvas.drawRoundRect(tagRect, 14f, 14f, tagBgPaint)
@@ -674,8 +695,8 @@ class LiveOverlayService : Service() {
     }
 
     /**
-     * Floating HUD pill:
-     * Eval chip, Best move chip, [📸 Scan] button, [📐 Board] button, minimize, and stop.
+     * Floating HUD pill (ChessMint-style):
+     * [⚪ White / ⚫ Black badge], [🟢 You / ⏳ Opp], Eval chip, Best move chip, [📸 Scan], [📐 Board], minimize, and stop.
      */
     private fun showFloatingHudPill() {
         if (hudWindowView != null) return
@@ -698,7 +719,45 @@ class LiveOverlayService : Service() {
             setPadding(16, 8, 16, 8)
         }
 
-        // Eval chip
+        // 1. Player Color Badge (Auto-detected, tap to override)
+        hudColorBadge = TextView(this).apply {
+            val isW = playerColor == PieceColor.WHITE
+            text = if (isW) " ⚪ W " else " ⚫ B "
+            textSize = 12f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(if (isW) Color.WHITE else Color.BLACK)
+            setBackgroundColor(if (isW) Color.argb(180, 50, 50, 50) else Color.argb(220, 240, 240, 240))
+            setPadding(8, 6, 8, 6)
+            setOnClickListener {
+                val currentOverride = settingsRepository.settings.value.playerColorOverride
+                val nextOverride = when (currentOverride) {
+                    "AUTO" -> "WHITE"
+                    "WHITE" -> "BLACK"
+                    else -> "AUTO"
+                }
+                val s = settingsRepository.settings.value.copy(
+                    playerColorOverride = nextOverride,
+                    isBoardFlipped = (nextOverride == "BLACK")
+                )
+                settingsRepository.updateSettings(s)
+                Toast.makeText(this@LiveOverlayService, "Color Mode: $nextOverride", Toast.LENGTH_SHORT).show()
+                ChessScreenCaptureService.requestScan(this@LiveOverlayService)
+            }
+        }
+        hudLayout.addView(hudColorBadge)
+
+        // 2. Turn Badge (🟢 You / ⏳ Opp)
+        hudTurnBadge = TextView(this).apply {
+            text = if (isPlayerTurn) " 🟢 You " else " ⏳ Opp "
+            textSize = 11f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            setBackgroundColor(if (isPlayerTurn) Color.argb(180, 22, 163, 74) else Color.argb(180, 217, 119, 6))
+            setPadding(8, 6, 8, 6)
+        }
+        hudLayout.addView(hudTurnBadge)
+
+        // 3. Eval chip
         hudEvalBadge = TextView(this).apply {
             text = currentEvalDisplay
             textSize = 13f
@@ -709,7 +768,7 @@ class LiveOverlayService : Service() {
         }
         hudLayout.addView(hudEvalBadge)
 
-        // Best move text
+        // 4. Best move text
         hudMoveText = TextView(this).apply {
             text = " $currentBestMoveSan "
             textSize = 13f
@@ -719,7 +778,7 @@ class LiveOverlayService : Service() {
         }
         hudLayout.addView(hudMoveText)
 
-        // 📸 Scan Button - Calls dedicated capture service without ever switching back to Chess Forge!
+        // 5. 📸 Scan Button - Immediate manual forced scan
         val scanBtn = TextView(this).apply {
             text = " 📸 Scan "
             textSize = 12f
@@ -739,7 +798,7 @@ class LiveOverlayService : Service() {
         }
         hudLayout.addView(scanBtn)
 
-        // 📐 Board Button (Calibration)
+        // 6. 📐 Board Button (Calibration)
         val calibrateBtn = TextView(this).apply {
             text = " 📐 Board "
             textSize = 12f
@@ -753,7 +812,7 @@ class LiveOverlayService : Service() {
         }
         hudLayout.addView(calibrateBtn)
 
-        // Minimize Button
+        // 7. Minimize Button
         val minimizeBtn = TextView(this).apply {
             text = " — "
             textSize = 14f
@@ -765,7 +824,7 @@ class LiveOverlayService : Service() {
         }
         hudLayout.addView(minimizeBtn)
 
-        // Stop Button
+        // 8. Stop Button
         val stopBtn = TextView(this).apply {
             text = " ✕ "
             textSize = 14f
@@ -809,11 +868,19 @@ class LiveOverlayService : Service() {
         }
     }
 
-    private fun updateHudWithResult(san: String, score: String) {
-        hudMoveText?.text = " $san "
-        hudEvalBadge?.text = score
-        val isAdvantage = !score.startsWith("-")
+    private fun updateHudWithResult(result: CaptureAnalysisResult) {
+        hudMoveText?.text = " ${result.bestMoveSan} "
+        hudEvalBadge?.text = result.evalDisplay
+        val isAdvantage = !result.evalDisplay.startsWith("-")
         hudEvalBadge?.setTextColor(if (isAdvantage) Color.parseColor("#00E676") else Color.parseColor("#FF5252"))
+
+        val isW = result.playerColor == PieceColor.WHITE
+        hudColorBadge?.text = if (isW) " ⚪ W " else " ⚫ B "
+        hudColorBadge?.setTextColor(if (isW) Color.WHITE else Color.BLACK)
+        hudColorBadge?.setBackgroundColor(if (isW) Color.argb(180, 50, 50, 50) else Color.argb(220, 240, 240, 240))
+
+        hudTurnBadge?.text = if (result.isPlayerTurn) " 🟢 You " else " ⏳ Opp "
+        hudTurnBadge?.setBackgroundColor(if (result.isPlayerTurn) Color.argb(180, 22, 163, 74) else Color.argb(180, 217, 119, 6))
     }
 
     private fun updateHudStatus(status: String) {

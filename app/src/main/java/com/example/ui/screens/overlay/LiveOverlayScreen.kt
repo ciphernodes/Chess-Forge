@@ -600,6 +600,49 @@ fun LiveOverlayScreen(
                         )
                     }
 
+                    // Auto-Detect Player Color (ChessMint-style)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Auto-Detect Player Color", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            Text("Detects if you are White or Black from board layout (ChessMint-style)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(
+                            checked = state.settings.autoDetectPlayerColor,
+                            onCheckedChange = { viewModel.toggleAutoDetectPlayerColor(it) }
+                        )
+                    }
+
+                    // Player Color Selector Mode
+                    Text("Active Player Side", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("AUTO" to "⚡ Auto-Detect", "WHITE" to "⚪ White", "BLACK" to "⚫ Black").forEach { (mode, label) ->
+                            val isSelected = state.settings.playerColorOverride == mode
+                            Surface(
+                                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { viewModel.updatePlayerColorMode(mode) }
+                            ) {
+                                Text(
+                                    text = label,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+
                     // Board Orientation
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -608,7 +651,7 @@ fun LiveOverlayScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Board Flipped (Black at bottom)", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                            Text("Reverse ranks and files for Black's perspective", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Manual flip override for Black's perspective", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = state.settings.isBoardFlipped,
