@@ -92,6 +92,34 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun startCalibrationMode() {
+        val context = getApplication<Application>()
+        val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Settings.canDrawOverlays(context)
+        } else {
+            true
+        }
+        if (!hasPermission) {
+            _showPermissionDialog.value = true
+            return
+        }
+
+        try {
+            val intent = Intent(context, LiveOverlayService::class.java).apply {
+                action = LiveOverlayService.ACTION_CALIBRATE
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+            _isOverlayRunning.value = true
+            _statusMessage.value = "Board calibration active: drag & resize the box over your chessboard!"
+        } catch (e: Exception) {
+            _statusMessage.value = "Failed to start calibration: ${e.localizedMessage}"
+        }
+    }
+
     fun dismissPermissionDialog() {
         _showPermissionDialog.value = false
     }

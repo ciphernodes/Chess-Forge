@@ -225,9 +225,10 @@ fun LiveOverlayScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Projects best-move arrows over any app with turn detection, battery throttling, and full game reconstruction.",
+                        text = "Projects best-move arrows over any chess app. All screen touches pass directly through so you can play without interference. Set the board position first to match your screen.",
                         fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        lineHeight = 17.sp
                     )
 
                     Spacer(modifier = Modifier.height(12.dp))
@@ -245,7 +246,18 @@ fun LiveOverlayScreen(
                             ) {
                                 Icon(Icons.Default.Stop, contentDescription = "Stop", modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Stop System Overlay")
+                                Text("Stop Overlay")
+                            }
+
+                            OutlinedButton(
+                                onClick = { viewModel.startCalibrationMode() },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("recalibrate_overlay_button")
+                            ) {
+                                Icon(Icons.Default.CropFree, contentDescription = "Set Board", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Re-Set Board")
                             }
                         } else {
                             Button(
@@ -257,7 +269,18 @@ fun LiveOverlayScreen(
                             ) {
                                 Icon(Icons.Default.PlayArrow, contentDescription = "Start", modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Start System Overlay")
+                                Text("Start Overlay")
+                            }
+
+                            OutlinedButton(
+                                onClick = { viewModel.startCalibrationMode() },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("calibrate_overlay_button")
+                            ) {
+                                Icon(Icons.Default.CropFree, contentDescription = "Set Board", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Set Board Position")
                             }
                         }
                     }
@@ -536,6 +559,38 @@ fun LiveOverlayScreen(
                         Switch(
                             checked = state.settings.isWatchingMode,
                             onCheckedChange = { viewModel.toggleWatchingMode(it) }
+                        )
+                    }
+
+                    // Prompt Board Position on Launch
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Prompt Board Position on Start", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            Text("Display alignment frame first to calibrate board bounds", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(
+                            checked = state.settings.alwaysPromptCalibration,
+                            onCheckedChange = { viewModel.toggleAlwaysPromptCalibration(it) }
+                        )
+                    }
+
+                    // Board Orientation
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Board Flipped (Black at bottom)", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            Text("Reverse ranks and files for Black's perspective", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(
+                            checked = state.settings.isBoardFlipped,
+                            onCheckedChange = { viewModel.toggleBoardFlipped(it) }
                         )
                     }
 

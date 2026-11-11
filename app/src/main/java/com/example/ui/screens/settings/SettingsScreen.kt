@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.CropFree
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FileDownload
@@ -285,11 +286,21 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = "Draws best-move arrows over other apps with turn detection, battery throttling, and full game reconstruction. Touches pass through freely.",
+                        text = "Draws best-move arrows over other apps with turn detection. Touches pass through freely with zero lag.",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         lineHeight = 17.sp
                     )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = { viewModel.startCalibrationMode() },
+                        modifier = Modifier.fillMaxWidth().testTag("calibrate_board_settings_button")
+                    ) {
+                        Icon(Icons.Default.CropFree, contentDescription = "Set Board", modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Set Board Position (Calibrate)", fontSize = 12.sp)
+                    }
                 }
             }
 

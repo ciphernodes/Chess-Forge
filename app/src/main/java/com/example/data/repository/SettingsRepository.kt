@@ -73,6 +73,8 @@ data class UserSettings(
     val showOverlayCoordinateHint: Boolean = true,
     val showOverlayTurnIndicator: Boolean = true,
     val isWatchingMode: Boolean = false, // false = playing mode, true = watching mode
+    val alwaysPromptCalibration: Boolean = true, // Prompt to set board position when launching overlay
+    val isBoardFlipped: Boolean = false, // Black at bottom
 
     // Active Profile
     val activeProfileName: String = "Study",
@@ -130,6 +132,8 @@ class SettingsRepository(private val context: Context) {
             showOverlayCoordinateHint = prefs.getBoolean("showOverlayCoordinateHint", true),
             showOverlayTurnIndicator = prefs.getBoolean("showOverlayTurnIndicator", true),
             isWatchingMode = prefs.getBoolean("isWatchingMode", false),
+            alwaysPromptCalibration = prefs.getBoolean("alwaysPromptCalibration", true),
+            isBoardFlipped = prefs.getBoolean("isBoardFlipped", false),
             activeProfileName = prefs.getString("activeProfileName", "Study") ?: "Study",
             puzzleRating = prefs.getInt("puzzleRating", 1200),
             puzzlesSolved = prefs.getInt("puzzlesSolved", 0),
@@ -168,6 +172,8 @@ class SettingsRepository(private val context: Context) {
             putBoolean("showOverlayCoordinateHint", newSettings.showOverlayCoordinateHint)
             putBoolean("showOverlayTurnIndicator", newSettings.showOverlayTurnIndicator)
             putBoolean("isWatchingMode", newSettings.isWatchingMode)
+            putBoolean("alwaysPromptCalibration", newSettings.alwaysPromptCalibration)
+            putBoolean("isBoardFlipped", newSettings.isBoardFlipped)
             putString("activeProfileName", newSettings.activeProfileName)
             putInt("puzzleRating", newSettings.puzzleRating)
             putInt("puzzlesSolved", newSettings.puzzlesSolved)
@@ -188,6 +194,10 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
+    fun hasSavedBoardRegion(): Boolean {
+        return prefs.contains("region_l")
+    }
+
     fun getSavedBoardRegion(): RectF? {
         if (!prefs.contains("region_l")) return null
         return RectF(
@@ -196,6 +206,29 @@ class SettingsRepository(private val context: Context) {
             prefs.getFloat("region_r", 0f),
             prefs.getFloat("region_b", 0f)
         )
+    }
+
+    fun getEffectiveBoardRect(screenWidth: Float, screenHeight: Float): RectF {
+        val saved = getSavedBoardRegion()
+        if (saved != null) {
+            return if (saved.right <= 1.0f && saved.bottom <= 1.0f) {
+                // Normalized 0..1 coordinates
+                RectF(
+                    saved.left * screenWidth,
+                    saved.top * screenHeight,
+                    saved.right * screenWidth,
+                    saved.bottom * screenHeight
+                )
+            } else {
+                // Absolute pixel coordinates
+                saved
+            }
+        }
+        // Default: square board centered in viewport
+        val size = (screenWidth * 0.92f).coerceAtMost(screenHeight * 0.55f)
+        val left = (screenWidth - size) / 2f
+        val top = (screenHeight - size) / 2f
+        return RectF(left, top, left + size, top + size)
     }
 
     fun clearBoardRegion() {

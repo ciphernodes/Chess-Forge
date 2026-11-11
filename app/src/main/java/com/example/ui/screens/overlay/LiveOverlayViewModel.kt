@@ -204,13 +204,54 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
             }
             _uiState.value = _uiState.value.copy(
                 isServiceRunning = true,
-                statusMessage = "Live Overlay Service started! Minimizing to background."
+                statusMessage = "Live Overlay started! Touches pass directly through to your chess app."
             )
         } catch (e: Exception) {
             _uiState.value = _uiState.value.copy(
                 statusMessage = "Unable to start background service: ${e.localizedMessage}"
             )
         }
+    }
+
+    fun startCalibrationMode() {
+        val context = getApplication<Application>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
+            _uiState.value = _uiState.value.copy(
+                statusMessage = "Grant 'Display over other apps' permission to calibrate board position."
+            )
+            return
+        }
+
+        try {
+            val intent = Intent(context, LiveOverlayService::class.java).apply {
+                action = LiveOverlayService.ACTION_CALIBRATE
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+            _uiState.value = _uiState.value.copy(
+                isServiceRunning = true,
+                statusMessage = "Board calibration active: switch to your chess app and align the box!"
+            )
+        } catch (e: Exception) {
+            _uiState.value = _uiState.value.copy(
+                statusMessage = "Unable to start calibration: ${e.localizedMessage}"
+            )
+        }
+    }
+
+    fun toggleAlwaysPromptCalibration(prompt: Boolean) {
+        val s = _uiState.value.settings.copy(alwaysPromptCalibration = prompt)
+        settingsRepository.updateSettings(s)
+        _uiState.value = _uiState.value.copy(settings = s)
+    }
+
+    fun toggleBoardFlipped(flipped: Boolean) {
+        val s = _uiState.value.settings.copy(isBoardFlipped = flipped)
+        settingsRepository.updateSettings(s)
+        _uiState.value = _uiState.value.copy(settings = s)
     }
 
     fun stopOverlayService() {
