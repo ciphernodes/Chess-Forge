@@ -139,6 +139,70 @@ class ChessVisionPipeline {
         )
     }
 
+    suspend fun processCroppedBoard(
+        croppedBoard: Bitmap,
+        isBoardFlipped: Boolean = false
+    ): VisionResult = withContext(Dispatchers.Default) {
+        val squareWidth = croppedBoard.width / 8
+        val squareHeight = croppedBoard.height / 8
+
+        val squareConfidences = FloatArray(64)
+        val boardPieces = arrayOfNulls<Piece>(64)
+
+        for (rank in 0..7) {
+            for (file in 0..7) {
+                val index = rank * 8 + file
+                val sqX = (file * squareWidth).coerceIn(0, croppedBoard.width - squareWidth)
+                val sqY = ((7 - rank) * squareHeight).coerceIn(0, croppedBoard.height - squareHeight)
+
+                val sqBmp = Bitmap.createBitmap(croppedBoard, sqX, sqY, squareWidth, squareHeight)
+
+                val resOriginal = classifySquare(sqBmp)
+                val enhancedBmp = enhanceContrast(sqBmp)
+                val resEnhanced = classifySquare(enhancedBmp)
+
+                val finalPiece = if (resOriginal.confidence >= resEnhanced.confidence) resOriginal.piece else resEnhanced.piece
+                val avgConfidence = (resOriginal.confidence + resEnhanced.confidence) / 2f
+
+                boardPieces[index] = finalPiece
+                squareConfidences[index] = avgConfidence
+            }
+        }
+
+        val isWhiteAtBottom = if (isBoardFlipped) false else detectOrientation(boardPieces)
+        if (!isWhiteAtBottom) {
+            flipBoardOrientation(boardPieces, squareConfidences)
+        }
+
+        val position = ChessPosition(
+            board = boardPieces,
+            activeColor = PieceColor.WHITE,
+            castlingRights = "KQkq",
+            enPassantSquare = null
+        )
+
+        val validation = validatePosition(position)
+        var overallConf = squareConfidences.minOrNull() ?: 0.5f
+        if (!validation.isValid) {
+            overallConf = min(overallConf, 0.74f)
+        }
+
+        VisionResult(
+            position = position,
+            fen = position.toFen(),
+            overallConfidence = overallConf,
+            isWhiteAtBottom = isWhiteAtBottom,
+            squareConfidences = squareConfidences,
+            validationPassed = validation.isValid,
+            validationErrors = validation.errors,
+            failingSquares = validation.failingSquares,
+            detectionMethodUsed = "Calibrated Board Crop",
+            boardRect = RectF(0f, 0f, croppedBoard.width.toFloat(), croppedBoard.height.toFloat()),
+            requiresConfirmation = overallConf in 0.75f..0.89f,
+            isRejected = overallConf < 0.60f
+        )
+    }
+
     private data class ClassifyResult(val piece: Piece?, val confidence: Float)
 
     private fun classifySquare(sqBmp: Bitmap): ClassifyResult {

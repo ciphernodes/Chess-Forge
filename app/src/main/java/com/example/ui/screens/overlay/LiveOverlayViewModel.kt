@@ -77,7 +77,7 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
         _uiState.value = _uiState.value.copy(
             isServiceRunning = LiveOverlayService.isRunning,
             hasOverlayPermission = hasOverlay,
-            isScreenCaptureActive = LiveOverlayService.isProjectionActive,
+            isScreenCaptureActive = com.example.service.ChessScreenCaptureService.isCapturing,
             settings = currentSettings
         )
     }
@@ -258,12 +258,9 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
 
     fun triggerManualScan() {
         val context = getApplication<Application>()
-        val intent = Intent(context, LiveOverlayService::class.java).apply {
-            action = LiveOverlayService.ACTION_CAPTURE_NOW
-        }
-        context.startService(intent)
+        com.example.service.ChessScreenCaptureService.requestScan(context)
         _uiState.value = _uiState.value.copy(
-            statusMessage = "Scanning chessboard position in Chess.com..."
+            statusMessage = "Scanning calibrated board in Chess.com..."
         )
     }
 
@@ -273,11 +270,13 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
             action = LiveOverlayService.ACTION_STOP
         }
         context.startService(intent)
+        com.example.service.ChessScreenCaptureService.stop(context)
 
         val pgn = gameReconstructor.gameState.exportPgn()
 
         _uiState.value = _uiState.value.copy(
             isServiceRunning = false,
+            isScreenCaptureActive = false,
             showReconstructOffer = true,
             reconstructedPgn = pgn,
             statusMessage = "Overlay stopped. Post-game analysis ready!"

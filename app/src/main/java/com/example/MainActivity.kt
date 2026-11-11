@@ -77,17 +77,26 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK && result.data != null) {
-            LiveOverlayService.mediaProjectionResultCode = result.resultCode
-            LiveOverlayService.mediaProjectionData = result.data
-            val intent = Intent(this, LiveOverlayService::class.java).apply {
-                action = LiveOverlayService.ACTION_START_WITH_PROJECTION
-                putExtra(LiveOverlayService.EXTRA_RESULT_CODE, result.resultCode)
-                putExtra(LiveOverlayService.EXTRA_RESULT_DATA, result.data)
+            // 1. Start dedicated screen capture service with MediaProjection token
+            val captureIntent = Intent(this, com.example.service.ChessScreenCaptureService::class.java).apply {
+                action = com.example.service.ChessScreenCaptureService.ACTION_START
+                putExtra(com.example.service.ChessScreenCaptureService.EXTRA_RESULT_CODE, result.resultCode)
+                putExtra(com.example.service.ChessScreenCaptureService.EXTRA_RESULT_DATA, result.data)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(intent)
+                startForegroundService(captureIntent)
             } else {
-                startService(intent)
+                startService(captureIntent)
+            }
+
+            // 2. Start floating overlay UI service
+            val overlayIntent = Intent(this, LiveOverlayService::class.java).apply {
+                action = LiveOverlayService.ACTION_START
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(overlayIntent)
+            } else {
+                startService(overlayIntent)
             }
             liveOverlayViewModel.loadState()
         }

@@ -1,6 +1,5 @@
 package com.example.service
 
-import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,7 +8,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.DashPathEffect
@@ -19,11 +17,7 @@ import android.graphics.PixelFormat
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
-import android.hardware.display.DisplayManager
-import android.hardware.display.VirtualDisplay
-import android.media.ImageReader
-import android.media.projection.MediaProjection
-import android.media.projection.MediaProjectionManager
+import android.graphics.Typeface
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -48,16 +42,12 @@ import com.example.core.chess.EnginePreset
 import com.example.core.chess.GameReconstructor
 import com.example.core.chess.Move
 import com.example.core.chess.Square
-import com.example.core.vision.ChessVisionPipeline
 import com.example.data.repository.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
@@ -67,22 +57,15 @@ class LiveOverlayService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var windowManager: WindowManager? = null
 
-    // Windows
+    // Overlay Windows
     private var arrowWindowView: View? = null
     private var hudWindowView: View? = null
     private var calibrationWindowView: View? = null
     private var bubbleWindowView: View? = null
     private var isBubbleMode = false
 
-    // Real-Time Screen Capture & Vision
-    private var mediaProjection: MediaProjection? = null
-    private var virtualDisplay: VirtualDisplay? = null
-    private var imageReader: ImageReader? = null
-    private val visionPipeline = ChessVisionPipeline()
-
     private val engine = ChessEngine()
     private val gameReconstructor = GameReconstructor()
-    private var captureJob: Job? = null
     private lateinit var settingsRepository: SettingsRepository
 
     private var currentPosition: ChessPosition = ChessPosition.fromFen("r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 4 5")
@@ -91,36 +74,21 @@ class LiveOverlayService : Service() {
     private var currentEvalCp: Int = 35
     private var currentEvalDisplay: String = "+0.35"
     private var isBoardFlipped: Boolean = false
-    private var scanStatusText: String = "Live Engine Active"
 
     // HUD View References
     private var hudEvalBadge: TextView? = null
     private var hudMoveText: TextView? = null
-    private var hudStatusText: TextView? = null
 
     companion object {
         const val ACTION_START = "ACTION_START_OVERLAY"
-        const val ACTION_START_WITH_PROJECTION = "ACTION_START_WITH_PROJECTION"
-        const val ACTION_CAPTURE_NOW = "ACTION_CAPTURE_NOW"
         const val ACTION_CALIBRATE = "ACTION_CALIBRATE_BOARD"
         const val ACTION_STOP = "ACTION_STOP_OVERLAY"
         const val ACTION_SWITCH_PROFILE = "ACTION_SWITCH_PROFILE"
-
-        const val EXTRA_RESULT_CODE = "EXTRA_RESULT_CODE"
-        const val EXTRA_RESULT_DATA = "EXTRA_RESULT_DATA"
 
         const val CHANNEL_ID = "chess_forge_overlay_channel"
         const val NOTIFICATION_ID = 404
 
         var isRunning = false
-            private set
-
-        var isProjectionActive = false
-            private set
-
-        var mediaProjectionResultCode: Int? = null
-        var mediaProjectionData: Intent? = null
-        var lastScannedFen: String? = null
             private set
     }
 
@@ -133,7 +101,33 @@ class LiveOverlayService : Service() {
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         createNotificationChannel()
 
-        // Pre-analyze initial position so arrow is guaranteed immediately
+        // Listen for capture & vision results from the dedicated ChessScreenCaptureService
+        serviceScope.launch {
+            ChessScreenCaptureService.latestAnalysisResult.collect { result ->
+                if (result != null) {
+                    currentPosition = result.position
+                    currentBestMove = result.bestMove
+                    currentBestMoveSan = result.bestMoveSan
+                    currentEvalCp = result.evalCp
+                    currentEvalDisplay = result.evalDisplay
+                    isBoardFlipped = !result.isWhiteAtBottom
+
+                    updateHudWithResult(result.bestMoveSan, result.evalDisplay)
+                    arrowWindowView?.invalidate()
+                }
+            }
+        }
+
+        // Listen for scan status messages from capture service
+        serviceScope.launch {
+            ChessScreenCaptureService.scanStatusMessage.collect { status ->
+                if (status != null) {
+                    updateHudStatus(status)
+                }
+            }
+        }
+
+        // Pre-analyze initial position so an arrow is rendered immediately
         serviceScope.launch {
             try {
                 val res = engine.analyze(currentPosition, settingsRepository.settings.value.enginePreset)
@@ -168,43 +162,12 @@ class LiveOverlayService : Service() {
                     showCalibrationOverlay()
                 }
             }
-            ACTION_CAPTURE_NOW -> {
-                serviceScope.launch {
-                    triggerManualScan()
-                }
-            }
-            ACTION_START_WITH_PROJECTION -> {
-                val code = intent.getIntExtra(EXTRA_RESULT_CODE, mediaProjectionResultCode ?: Activity.RESULT_CANCELED)
-                val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java) ?: mediaProjectionData
-                } else {
-                    @Suppress("DEPRECATION")
-                    (intent.getParcelableExtra(EXTRA_RESULT_DATA) as? Intent) ?: mediaProjectionData
-                }
-
-                if (code == Activity.RESULT_OK && data != null) {
-                    initMediaProjection(code, data)
-                }
-
-                showForegroundNotification()
-                isRunning = true
-                if (checkOverlayPermission()) {
-                    startActiveOverlay()
-                }
-                startCaptureLoop()
-            }
             else -> {
-                // If projection data already stored from earlier consent, reuse it
-                if (mediaProjectionData != null && mediaProjectionResultCode == Activity.RESULT_OK) {
-                    initMediaProjection(mediaProjectionResultCode!!, mediaProjectionData)
-                }
-
                 showForegroundNotification()
                 isRunning = true
                 if (checkOverlayPermission()) {
                     startActiveOverlay()
                 }
-                startCaptureLoop()
             }
         }
         return START_STICKY
@@ -213,26 +176,8 @@ class LiveOverlayService : Service() {
     private fun showForegroundNotification() {
         try {
             val notification = buildNotification()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                if (mediaProjection != null || isProjectionActive) {
-                    val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION or ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                    } else {
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-                    }
-                    startForeground(NOTIFICATION_ID, notification, type)
-                } else {
-                    val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                    } else {
-                        0
-                    }
-                    if (type != 0) {
-                        startForeground(NOTIFICATION_ID, notification, type)
-                    } else {
-                        startForeground(NOTIFICATION_ID, notification)
-                    }
-                }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
@@ -256,7 +201,7 @@ class LiveOverlayService : Service() {
                 "Chess Forge Live Overlay",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Active screen analysis, board calibration, and best-move arrows"
+                description = "Active best-move overlay arrows and calibration"
             }
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
@@ -265,33 +210,27 @@ class LiveOverlayService : Service() {
 
     private fun buildNotification(): Notification {
         val stopIntent = Intent(this, LiveOverlayService::class.java).apply { action = ACTION_STOP }
-        val stopPendingIntent = PendingIntent.getService(
-            this, 1, stopIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val stopPending = PendingIntent.getService(this, 1, stopIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+
+        val scanPending = PendingIntent.getService(
+            this, 2,
+            Intent(this, ChessScreenCaptureService::class.java).apply { action = ChessScreenCaptureService.ACTION_CAPTURE_NOW },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val scanIntent = Intent(this, LiveOverlayService::class.java).apply { action = ACTION_CAPTURE_NOW }
-        val scanPendingIntent = PendingIntent.getService(
-            this, 2, scanIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val openAppIntent = Intent(this, MainActivity::class.java).apply {
-            putExtra("SHORTCUT_DESTINATION", "OVERLAY")
-        }
-        val openAppPendingIntent = PendingIntent.getActivity(
-            this, 0, openAppIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        val openApp = Intent(this, MainActivity::class.java).apply { putExtra("SHORTCUT_DESTINATION", "OVERLAY") }
+        val openPending = PendingIntent.getActivity(this, 0, openApp, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
         val activeProfile = settingsRepository.settings.value.activeProfileName
-        val status = if (isProjectionActive) "Real-Time Scanner Active" else "Ready (Tap Scan Board)"
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Chess Forge Live Overlay")
-            .setContentText("$status • Profile: $activeProfile")
+            .setContentTitle("Chess Forge Live Overlay Active")
+            .setContentText("Profile: $activeProfile • Touches pass through to Chess.com")
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentIntent(openAppPendingIntent)
+            .setContentIntent(openPending)
             .setOngoing(true)
-            .addAction(android.R.drawable.ic_menu_camera, "Scan Board", scanPendingIntent)
-            .addAction(android.R.drawable.ic_media_pause, "Stop", stopPendingIntent)
+            .addAction(android.R.drawable.ic_menu_camera, "Scan Board", scanPending)
+            .addAction(android.R.drawable.ic_media_pause, "Stop", stopPending)
             .build()
     }
 
@@ -309,140 +248,7 @@ class LiveOverlayService : Service() {
     }
 
     /**
-     * Initializes MediaProjection and VirtualDisplay for live screen pixel capture
-     */
-    private fun initMediaProjection(code: Int, data: Intent?) {
-        if (data == null || code != Activity.RESULT_OK) return
-        mediaProjectionResultCode = code
-        mediaProjectionData = data
-
-        try {
-            val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            virtualDisplay?.release()
-            imageReader?.close()
-            mediaProjection?.stop()
-
-            mediaProjection = mpm.getMediaProjection(code, data)
-
-            val metrics = resources.displayMetrics
-            val w = metrics.widthPixels
-            val h = metrics.heightPixels
-            val dpi = metrics.densityDpi
-
-            imageReader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
-            virtualDisplay = mediaProjection?.createVirtualDisplay(
-                "ChessForgeScreenStream",
-                w, h, dpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                imageReader?.surface,
-                null, null
-            )
-            isProjectionActive = true
-            scanStatusText = "Scanner Active"
-            updateHudStatus("Scanner Active • Live")
-            showForegroundNotification()
-        } catch (e: Exception) {
-            e.printStackTrace()
-            isProjectionActive = false
-            scanStatusText = "Scanner Error: ${e.message}"
-        }
-    }
-
-    /**
-     * Captures a single frame from screen and runs vision pipeline + engine analysis
-     */
-    private suspend fun captureAndAnalyzeScreen(): Boolean = withContext(Dispatchers.Default) {
-        val reader = imageReader ?: return@withContext false
-        val image = reader.acquireLatestImage() ?: return@withContext false
-
-        try {
-            val planes = image.planes
-            val buffer = planes[0].buffer
-            val pixelStride = planes[0].pixelStride
-            val rowStride = planes[0].rowStride
-            val width = image.width
-            val height = image.height
-            val rowPadding = rowStride - pixelStride * width
-
-            val bitmap = Bitmap.createBitmap(
-                width + rowPadding / pixelStride,
-                height,
-                Bitmap.Config.ARGB_8888
-            )
-            bitmap.copyPixelsFromBuffer(buffer)
-            image.close()
-
-            val screenW = width.toFloat()
-            val screenH = height.toFloat()
-            val boardRect = settingsRepository.getEffectiveBoardRect(screenW, screenH)
-
-            val visionResult = visionPipeline.processImage(bitmap, boardRect)
-            val pos = visionResult.position
-
-            val pieceCount = pos.board.count { it != null }
-            if (pieceCount >= 4) {
-                val newFen = pos.toFen()
-                if (newFen != lastScannedFen) {
-                    lastScannedFen = newFen
-                    currentPosition = pos
-                    isBoardFlipped = !visionResult.isWhiteAtBottom
-
-                    val res = engine.analyze(
-                        position = currentPosition,
-                        preset = settingsRepository.settings.value.enginePreset
-                    )
-                    if (res.bestMove != null) {
-                        currentBestMove = res.bestMove
-                        currentEvalCp = res.evaluationCp
-                        currentEvalDisplay = res.displayScore
-                        currentBestMoveSan = res.bestMoveSan
-
-                        withContext(Dispatchers.Main) {
-                            updateHudWithResult(res.bestMoveSan, res.displayScore, pieceCount)
-                            arrowWindowView?.invalidate()
-                        }
-                        return@withContext true
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        } finally {
-            try { image.close() } catch (_: Exception) {}
-        }
-        return@withContext false
-    }
-
-    private suspend fun triggerManualScan() {
-        if (!isProjectionActive || imageReader == null) {
-            // Prompt screen capture via MainActivity
-            withContext(Dispatchers.Main) {
-                Toast.makeText(this@LiveOverlayService, "Launching Screen Capture Permission...", Toast.LENGTH_SHORT).show()
-                val intent = Intent(this@LiveOverlayService, MainActivity::class.java).apply {
-                    action = "ACTION_REQUEST_SCREEN_CAPTURE"
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                }
-                startActivity(intent)
-            }
-            return
-        }
-
-        withContext(Dispatchers.Main) {
-            updateHudStatus("Scanning Chess.com...")
-        }
-
-        val success = captureAndAnalyzeScreen()
-        withContext(Dispatchers.Main) {
-            if (success) {
-                Toast.makeText(this@LiveOverlayService, "Scanned: $currentBestMoveSan ($currentEvalDisplay)", Toast.LENGTH_SHORT).show()
-            } else {
-                updateHudStatus("Align board box (tap 📐 Set Board)")
-            }
-        }
-    }
-
-    /**
-     * CALIBRATION OVERLAY (Draggable frame to align over Chess.com / Lichess)
+     * CALIBRATION OVERLAY (Interactive frame to align over Chess.com / Lichess)
      */
     private fun showCalibrationOverlay() {
         dismissArrowWindow()
@@ -599,7 +405,7 @@ class LiveOverlayService : Service() {
             textSize = 17f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTypeface(null, Typeface.BOLD)
         }
         headerLayout.addView(headerTitle)
 
@@ -672,7 +478,7 @@ class LiveOverlayService : Service() {
         val lockBtn = Button(this).apply {
             text = "✓ Lock Board & Enable Touch"
             textSize = 14f
-            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTypeface(null, Typeface.BOLD)
             setBackgroundColor(Color.parseColor("#00E676"))
             setTextColor(Color.BLACK)
             setPadding(32, 12, 32, 12)
@@ -714,9 +520,8 @@ class LiveOverlayService : Service() {
     }
 
     /**
-     * ACTIVE OVERLAY:
-     * 1. Full-screen Arrow Layer with FLAG_NOT_TOUCHABLE -> 100% touch pass-through!
-     * 2. Small floating HUD pill at top of screen with Eval, Best Move, Scan Board, Calibrate, and Stop.
+     * Active Best-Move Arrow Window:
+     * FLAG_NOT_TOUCHABLE -> 100% touches pass directly through to Chess.com!
      */
     private fun startActiveOverlay() {
         dismissCalibrationOverlay()
@@ -741,24 +546,18 @@ class LiveOverlayService : Service() {
         }
 
         val arrowCanvasView = object : View(this) {
-            private val shaftPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                strokeCap = Paint.Cap.ROUND
-            }
+            private val shaftPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.ROUND }
             private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 strokeCap = Paint.Cap.ROUND
                 color = Color.argb(200, 0, 0, 0)
             }
-            private val headPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.FILL
-            }
+            private val headPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
             private val headOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 style = Paint.Style.STROKE
                 color = Color.BLACK
                 strokeWidth = 6f
             }
-            private val sourceCirclePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.FILL
-            }
+            private val sourceCirclePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
             private val targetRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 style = Paint.Style.STROKE
                 strokeWidth = 6f
@@ -771,7 +570,7 @@ class LiveOverlayService : Service() {
                 color = Color.WHITE
                 textSize = 28f
                 textAlign = Paint.Align.CENTER
-                typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
             }
 
             init {
@@ -826,9 +625,7 @@ class LiveOverlayService : Service() {
                 shaftPaint.strokeWidth = strokeW
                 outlinePaint.strokeWidth = strokeW + 10f
 
-                // Black outline
                 canvas.drawLine(startX, startY, targetX, targetY, outlinePaint)
-                // Vibrant shaft
                 canvas.drawLine(startX, startY, targetX, targetY, shaftPaint)
 
                 // 4. Arrowhead
@@ -850,7 +647,7 @@ class LiveOverlayService : Service() {
                 canvas.drawPath(headPath, headPaint)
                 canvas.drawPath(headPath, headOutlinePaint)
 
-                // 5. Move & Eval floating tag
+                // 5. Move & Eval tag
                 val midX = (startX + endX) / 2f
                 val midY = (startY + endY) / 2f - (sqH * 0.25f)
                 val tagText = "${currentBestMoveSan.ifEmpty { "${move.from}→${move.to}" }} ($currentEvalDisplay)"
@@ -878,7 +675,7 @@ class LiveOverlayService : Service() {
 
     /**
      * Floating HUD pill:
-     * Eval chip, Best move chip, [📸 Scan Board] button, [📐 Set Board] button, minimize, and stop.
+     * Eval chip, Best move chip, [📸 Scan] button, [📐 Board] button, minimize, and stop.
      */
     private fun showFloatingHudPill() {
         if (hudWindowView != null) return
@@ -905,7 +702,7 @@ class LiveOverlayService : Service() {
         hudEvalBadge = TextView(this).apply {
             text = currentEvalDisplay
             textSize = 13f
-            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor("#00E676"))
             setBackgroundColor(Color.argb(160, 0, 0, 0))
             setPadding(12, 6, 12, 6)
@@ -916,33 +713,37 @@ class LiveOverlayService : Service() {
         hudMoveText = TextView(this).apply {
             text = " $currentBestMoveSan "
             textSize = 13f
-            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTypeface(null, Typeface.BOLD)
             setTextColor(Color.WHITE)
             setPadding(8, 0, 8, 0)
         }
         hudLayout.addView(hudMoveText)
 
-        // 📸 Scan Board Button (Captures and analyzes Chess.com screen immediately!)
+        // 📸 Scan Button - Calls dedicated capture service without ever switching back to Chess Forge!
         val scanBtn = TextView(this).apply {
             text = " 📸 Scan "
             textSize = 12f
-            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTypeface(null, Typeface.BOLD)
             setTextColor(Color.BLACK)
             setBackgroundColor(Color.parseColor("#00E676"))
             setPadding(12, 6, 12, 6)
             setOnClickListener {
-                serviceScope.launch {
-                    triggerManualScan()
+                if (ChessScreenCaptureService.isCapturing) {
+                    updateHudStatus("Scanning calibrated board...")
+                    ChessScreenCaptureService.requestScan(this@LiveOverlayService)
+                } else {
+                    updateHudStatus("Capture not active • Open Chess Forge")
+                    Toast.makeText(this@LiveOverlayService, "Screen Capture not granted. Tap 'Start & Screen Scan' in Chess Forge.", Toast.LENGTH_SHORT).show()
                 }
             }
         }
         hudLayout.addView(scanBtn)
 
-        // 📐 Set Board Button
+        // 📐 Board Button (Calibration)
         val calibrateBtn = TextView(this).apply {
             text = " 📐 Board "
             textSize = 12f
-            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor("#38BDF8"))
             setBackgroundColor(Color.argb(120, 3, 105, 161))
             setPadding(10, 6, 10, 6)
@@ -1008,7 +809,7 @@ class LiveOverlayService : Service() {
         }
     }
 
-    private fun updateHudWithResult(san: String, score: String, pieces: Int) {
+    private fun updateHudWithResult(san: String, score: String) {
         hudMoveText?.text = " $san "
         hudEvalBadge?.text = score
         val isAdvantage = !score.startsWith("-")
@@ -1113,47 +914,12 @@ class LiveOverlayService : Service() {
         }
     }
 
-    private fun startCaptureLoop() {
-        captureJob?.cancel()
-        captureJob = serviceScope.launch(Dispatchers.Default) {
-            val fps = settingsRepository.settings.value.overlayFps.coerceIn(1, 15)
-            val delayMs = 1000L / fps
-
-            while (true) {
-                if (isProjectionActive && imageReader != null) {
-                    try {
-                        captureAndAnalyzeScreen()
-                    } catch (_: Exception) {}
-                } else {
-                    try {
-                        val res = engine.analyze(
-                            position = currentPosition,
-                            preset = settingsRepository.settings.value.enginePreset
-                        )
-                        currentBestMove = res.bestMove
-                        currentEvalCp = res.evaluationCp
-                        currentEvalDisplay = res.displayScore
-                        currentBestMoveSan = res.bestMoveSan
-                        withContext(Dispatchers.Main) {
-                            arrowWindowView?.invalidate()
-                        }
-                    } catch (_: Exception) {}
-                }
-                delay(delayMs)
-            }
-        }
-    }
-
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
-        isProjectionActive = false
-        captureJob?.cancel()
         serviceScope.cancel()
 
-        virtualDisplay?.release()
-        imageReader?.close()
-        mediaProjection?.stop()
+        ChessScreenCaptureService.stop(this)
 
         dismissCalibrationOverlay()
         dismissArrowWindow()
