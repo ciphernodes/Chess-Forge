@@ -4,6 +4,13 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,6 +31,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Analytics
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CropFree
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -37,6 +46,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -91,15 +101,15 @@ fun LiveOverlayScreen(
     if (state.showReconstructOffer) {
         AlertDialog(
             onDismissRequest = { viewModel.dismissReconstructOffer() },
-            title = { Text("Game Reconstructed", fontWeight = FontWeight.Bold) },
+            title = { Text("Game Reconstruction Ready", fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "Overlay captured ${state.reconstructedMovesCount} moves during this session.",
+                        text = "The overlay session captured ${state.reconstructedMovesCount} moves with timestamps and turn detection.",
                         fontSize = 14.sp
                     )
                     Text(
-                        text = "Would you like to analyze this game in Practice Mode with move classifications, accuracy, and critical moments?",
+                        text = "Would you like to analyze this game in Practice Mode with full move classifications, accuracy scores, and critical moments?",
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -114,7 +124,7 @@ fun LiveOverlayScreen(
                 ) {
                     Icon(Icons.Default.Analytics, contentDescription = "Analyze", modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Analyze Game")
+                    Text("Analyze Reconstructed Game")
                 }
             },
             dismissButton = {
@@ -130,11 +140,26 @@ fun LiveOverlayScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        text = "Live Overlay",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp
-                    )
+                    Column {
+                        Text(
+                            text = "Live Overlay",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp
+                        )
+                        Text(
+                            text = if (state.isServiceRunning) "System Window Active" else "Interactive Sandbox Active",
+                            fontSize = 11.sp,
+                            color = if (state.isServiceRunning) Color(0xFF00E676) else MaterialTheme.colorScheme.primary
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = { viewModel.toggleAdjustRegion() },
+                        modifier = Modifier.testTag("adjust_region_button")
+                    ) {
+                        Icon(Icons.Default.CropFree, contentDescription = "Adjust Board Region")
+                    }
                 }
             )
         },
@@ -145,19 +170,19 @@ fun LiveOverlayScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 14.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(horizontal = 14.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             // Main Overlay Control Card
             Card(
                 colors = CardDefaults.cardColors(
-                    containerColor = if (state.isServiceRunning) Color(0xFFE6F4EA) else MaterialTheme.colorScheme.surface
+                    containerColor = if (state.isServiceRunning) Color(0xFFE8F5E9) else MaterialTheme.colorScheme.surface
                 ),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(14.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -168,13 +193,13 @@ fun LiveOverlayScreen(
                                 modifier = Modifier
                                     .size(12.dp)
                                     .clip(CircleShape)
-                                    .background(if (state.isServiceRunning) Color(0xFF00E676) else Color(0xFF9E9E9E))
+                                    .background(if (state.isServiceRunning) Color(0xFF00E676) else Color(0xFF0D9488))
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = if (state.isServiceRunning) "OVERLAY ACTIVE" else "OVERLAY STOPPED",
+                                text = if (state.isServiceRunning) "SYSTEM OVERLAY ACTIVE" else "LIVE OVERLAY SANDBOX",
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp,
+                                fontSize = 13.sp,
                                 color = if (state.isServiceRunning) Color(0xFF1B5E20) else MaterialTheme.colorScheme.onSurface
                             )
                         }
@@ -191,73 +216,111 @@ fun LiveOverlayScreen(
                                     }
                                 }
                             ) {
-                                Icon(Icons.Default.Security, contentDescription = "Grant Permission", modifier = Modifier.size(14.dp))
+                                Icon(Icons.Default.Security, contentDescription = "Permission", modifier = Modifier.size(13.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Grant Permission", fontSize = 11.sp)
                             }
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Real-time best-move arrow projected onto any chess app with turn detection and background analysis.",
-                        fontSize = 13.sp,
+                        text = "Projects best-move arrows over any app with turn detection, battery throttling, and full game reconstruction.",
+                        fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    Spacer(modifier = Modifier.height(16.dp))
-                    if (state.isServiceRunning) {
-                        Button(
-                            onClick = { viewModel.stopOverlayService() },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("stop_overlay_button")
-                        ) {
-                            Icon(Icons.Default.Stop, contentDescription = "Stop")
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Stop Live Overlay")
-                        }
-                    } else {
-                        Button(
-                            onClick = { viewModel.startOverlayService() },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0D9488)),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("start_overlay_button")
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = "Start")
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Start Live Overlay")
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (state.isServiceRunning) {
+                            Button(
+                                onClick = { viewModel.stopOverlayService() },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("stop_overlay_button")
+                            ) {
+                                Icon(Icons.Default.Stop, contentDescription = "Stop", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Stop System Overlay")
+                            }
+                        } else {
+                            Button(
+                                onClick = { viewModel.startOverlayService() },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0D9488)),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("start_overlay_button")
+                            ) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = "Start", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Start System Overlay")
+                            }
                         }
                     }
                 }
             }
 
-            // Competitive App Notice (Section 4.8)
-            Surface(
-                color = Color(0xFFFFF8E1),
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(10.dp),
-                    verticalAlignment = Alignment.CenterVertically
+            // Region Adjustment Banner
+            AnimatedVisibility(visible = state.isAdjustingRegion) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFE0F2FE)),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(Icons.Default.Security, contentDescription = "Notice", tint = Color(0xFFF57F17), modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Notice: Live analysis in competitive games violates chess platforms' terms of service. For study and review purposes only.",
-                        fontSize = 11.sp,
-                        color = Color(0xFF5D4037)
-                    )
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Adjust Board Region (Drag to Fit)",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = Color(0xFF0369A1)
+                            )
+                            IconButton(onClick = { viewModel.toggleAdjustRegion() }) {
+                                Icon(Icons.Default.Close, contentDescription = "Close", modifier = Modifier.size(18.dp))
+                            }
+                        }
+                        Text(
+                            text = "Set region boundaries so the overlay maps accurately to your chess board size:",
+                            fontSize = 12.sp,
+                            color = Color(0xFF334155)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { viewModel.resetBoardRegion() },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = "Reset", modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Reset Region", fontSize = 11.sp)
+                            }
+                            Button(
+                                onClick = { viewModel.toggleAdjustRegion() },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Save Region", fontSize = 11.sp)
+                            }
+                        }
+                    }
                 }
             }
 
-            // Live Visual Preview Card (Section 4.4 & 4.5)
+            // LIVE OVERLAY SANDBOX & INTERACTIVE BOARD
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 shape = RoundedCornerShape(12.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
@@ -267,79 +330,184 @@ fun LiveOverlayScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Overlay Arrow Preview",
+                            text = "Interactive Overlay Sandbox",
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp
                         )
-                        Text(
-                            text = if (state.settings.isWatchingMode) "Watching Mode" else "Playing Mode",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.SemiBold
-                        )
+
+                        // Move Type Indicator Badge (Section 4.4)
+                        val moveBadgeText = when {
+                            state.isCheckMove -> "Check (+)"
+                            state.isCaptureMove -> "Capture (×)"
+                            state.isSpecialMoveOnly -> "Only Legal Move"
+                            else -> "Quiet Best Move"
+                        }
+                        Surface(
+                            color = Color(state.moveTypeColor).copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                text = moveBadgeText,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(state.moveTypeColor),
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
-                    // Sample Board Preview with Overlay Arrow and Badges
-                    Box(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "Tap pieces on the board below to test live turn detection and arrow tracking:",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // OVERLAY CANVAS CONTAINER
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                    ) {
+                        // 1. The Interactive Board
                         ChessBoardView(
-                            position = state.samplePosition,
-                            bestMove = state.sampleBestMove,
-                            bestMoveColor = Color(state.settings.arrowBaseColor.hex),
-                            pulseArrow = state.settings.overlayPulseAnimation
+                            position = state.position,
+                            scheme = state.settings.boardScheme,
+                            isWhiteAtBottom = true,
+                            selectedSquare = state.selectedSquare,
+                            legalMoves = state.legalMoves,
+                            bestMove = if (!state.isBubbleMinimized) state.bestMove else null,
+                            bestMoveColor = Color(state.moveTypeColor),
+                            pulseArrow = state.settings.overlayPulseAnimation,
+                            onSquareClick = { viewModel.onSquareClicked(it) }
                         )
 
-                        // Top right: Eval Badge + Confidence Dot (Section 4.5)
-                        if (state.settings.showOverlayEvalBadge) {
-                            Row(
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .padding(8.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(Color(0xDD0F172A))
-                                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                if (state.settings.showOverlayConfidenceDot) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .clip(CircleShape)
-                                            .background(Color(0xFF00E676))
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                }
-                                Text(
-                                    text = "+0.35",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF00E676)
-                                )
-                            }
-                        }
-
-                        // Bottom center: Turn indicator (Section 4.5)
-                        if (state.settings.showOverlayTurnIndicator) {
+                        // 2. Overlay Board Region Highlight (if adjusting region)
+                        if (state.isAdjustingRegion) {
                             Box(
                                 modifier = Modifier
-                                    .align(Alignment.BottomCenter)
-                                    .padding(8.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Color(0xDD000000))
-                                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                                    .matchParentSize()
+                                    .padding(12.dp)
+                                    .border(2.dp, Color(0xFF00E676), RoundedCornerShape(4.dp))
+                                    .background(Color(0x2200E676))
+                            )
+                        }
+
+                        // 3. Floating 50x50dp Minimized Bubble (Section 4.5)
+                        if (state.isBubbleMinimized) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(12.dp)
+                                    .size(50.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF0D9488))
+                                    .border(2.dp, Color.White, CircleShape)
+                                    .clickable { viewModel.toggleMinimizeBubble() }
+                                    .testTag("floating_bubble"),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = if (state.settings.isWatchingMode) "White to move" else "Your move",
-                                    fontSize = 11.sp,
+                                    text = "♘",
+                                    fontSize = 24.sp,
                                     color = Color.White
                                 )
+                            }
+                        } else {
+                            // 4. Minimize Button (30x30dp x, top-left)
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(8.dp)
+                                    .size(30.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xDD0F172A))
+                                    .clickable { viewModel.toggleMinimizeBubble() }
+                                    .testTag("minimize_overlay_button"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "✕",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
+
+                            // 5. Top-Right: Eval Badge + 8dp Confidence Dot (Section 4.5)
+                            if (state.settings.showOverlayEvalBadge) {
+                                Row(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(8.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Color(0xEE0F172A))
+                                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (state.settings.showOverlayConfidenceDot) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .clip(CircleShape)
+                                                .background(Color(0xFF00E676))
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                    }
+                                    val evalText = state.analysisResult?.displayScore ?: "+0.35"
+                                    Text(
+                                        text = evalText,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if ((state.analysisResult?.evaluationCp ?: 0) >= 0) Color(0xFF00E676) else Color(0xFFFF1744)
+                                    )
+                                }
+                            }
+
+                            // 6. Bottom-Center: Turn Indicator ("Your move" / "Opponent's move")
+                            if (state.settings.showOverlayTurnIndicator) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .padding(8.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(Color(0xDD000000))
+                                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = state.turnLabel,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color.White
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Captured ${state.reconstructedMovesCount} moves in session",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (state.reconstructedMovesCount > 0) {
+                            TextButton(onClick = { viewModel.stopOverlayService() }) {
+                                Text("End & Analyze Game", fontSize = 12.sp)
                             }
                         }
                     }
                 }
             }
 
-            // Overlay Customization Settings (Section 8.4)
+            // Customization Settings
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 shape = RoundedCornerShape(12.dp),
@@ -350,7 +518,7 @@ fun LiveOverlayScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text(
-                        text = "Overlay Settings",
+                        text = "Overlay Appearance & Controls",
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp
                     )
@@ -361,7 +529,7 @@ fun LiveOverlayScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text("Watching Mode", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                             Text("Show moves for both sides instead of just player", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -371,8 +539,8 @@ fun LiveOverlayScreen(
                         )
                     }
 
-                    // Arrow Color Picker
-                    Text("Arrow Color", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    // Arrow Base Color Picker
+                    Text("Base Arrow Color", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -394,7 +562,7 @@ fun LiveOverlayScreen(
                         }
                     }
 
-                    // FPS Slider (1-15, default 5)
+                    // Capture Frame Rate Slider (1-15 FPS, default 5)
                     Column {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -411,7 +579,7 @@ fun LiveOverlayScreen(
                         )
                     }
 
-                    // Arrow Opacity Slider (40-100%)
+                    // Arrow Opacity Slider (40% - 100%)
                     Column {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -427,33 +595,33 @@ fun LiveOverlayScreen(
                         )
                     }
 
-                    // Pulse Animation toggle
+                    // Pulse Animation Toggle
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Pulse Animation", fontSize = 13.sp)
+                        Text("Soft Pulse Animation", fontSize = 13.sp)
                         Switch(
                             checked = state.settings.overlayPulseAnimation,
                             onCheckedChange = { viewModel.togglePulse(it) }
                         )
                     }
 
-                    // Eval badge toggle
+                    // Eval Badge Toggle
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Show Eval Badge", fontSize = 13.sp)
+                        Text("Show Eval Badge Pill", fontSize = 13.sp)
                         Switch(
                             checked = state.settings.showOverlayEvalBadge,
                             onCheckedChange = { viewModel.toggleEvalBadge(it) }
                         )
                     }
 
-                    // Turn indicator toggle
+                    // Turn Indicator Toggle
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -464,16 +632,6 @@ fun LiveOverlayScreen(
                             checked = state.settings.showOverlayTurnIndicator,
                             onCheckedChange = { viewModel.toggleTurnIndicator(it) }
                         )
-                    }
-
-                    // Reset Board Region Button
-                    OutlinedButton(
-                        onClick = { viewModel.resetBoardRegion() },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Reset", modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Reset Saved Board Region")
                     }
                 }
             }

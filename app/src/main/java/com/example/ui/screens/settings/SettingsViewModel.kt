@@ -4,6 +4,9 @@ import android.app.Application
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.os.Build
+import android.provider.Settings
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.core.chess.EnginePreset
@@ -12,6 +15,7 @@ import com.example.data.repository.BoardScheme
 import com.example.data.repository.ChessRepository
 import com.example.data.repository.SettingsRepository
 import com.example.data.repository.UserSettings
+import com.example.service.LiveOverlayService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,6 +29,12 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val _settings = MutableStateFlow(settingsRepository.settings.value)
     val settings: StateFlow<UserSettings> = _settings.asStateFlow()
 
+    private val _isOverlayRunning = MutableStateFlow(LiveOverlayService.isRunning)
+    val isOverlayRunning: StateFlow<Boolean> = _isOverlayRunning.asStateFlow()
+
+    private val _showPermissionDialog = MutableStateFlow(false)
+    val showPermissionDialog: StateFlow<Boolean> = _showPermissionDialog.asStateFlow()
+
     private val _statusMessage = MutableStateFlow<String?>(null)
     val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
 
@@ -34,6 +44,56 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 _settings.value = it
             }
         }
+    }
+
+    fun refreshOverlayStatus() {
+        _isOverlayRunning.value = LiveOverlayService.isRunning
+    }
+
+    fun toggleLiveOverlay(enable: Boolean) {
+        val context = getApplication<Application>()
+        if (enable) {
+            val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                Settings.canDrawOverlays(context)
+            } else {
+                true
+            }
+
+            if (!hasPermission) {
+                _showPermissionDialog.value = true
+                return
+            }
+
+            try {
+                val intent = Intent(context, LiveOverlayService::class.java).apply {
+                    action = LiveOverlayService.ACTION_START
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+                _isOverlayRunning.value = true
+                _statusMessage.value = "Live Overlay Service started"
+            } catch (e: Exception) {
+                _statusMessage.value = "Failed to start overlay: ${e.localizedMessage}"
+            }
+        } else {
+            try {
+                val intent = Intent(context, LiveOverlayService::class.java).apply {
+                    action = LiveOverlayService.ACTION_STOP
+                }
+                context.startService(intent)
+                _isOverlayRunning.value = false
+                _statusMessage.value = "Live Overlay Service stopped"
+            } catch (e: Exception) {
+                _statusMessage.value = "Error stopping service: ${e.localizedMessage}"
+            }
+        }
+    }
+
+    fun dismissPermissionDialog() {
+        _showPermissionDialog.value = false
     }
 
     fun updatePreset(preset: EnginePreset) {

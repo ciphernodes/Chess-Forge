@@ -124,6 +124,10 @@ class MainActivity : ComponentActivity() {
                             AppTab.OVERLAY -> LiveOverlayScreen(
                                 viewModel = liveOverlayViewModel,
                                 onNavigateToPracticeWithReconstruction = {
+                                    val pgn = liveOverlayViewModel.uiState.value.reconstructedPgn
+                                    if (pgn.isNotBlank()) {
+                                        practiceViewModel.loadPgnText(pgn)
+                                    }
                                     currentTab = AppTab.PRACTICE
                                 },
                                 modifier = Modifier.padding(padding)
