@@ -1,6 +1,8 @@
 package com.example
 
+import android.content.Context
 import android.content.Intent
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -8,6 +10,7 @@ import android.os.Parcelable
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -33,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import com.example.data.repository.SettingsRepository
+import com.example.service.LiveOverlayService
 import com.example.ui.screens.history.HistoryScreen
 import com.example.ui.screens.history.HistoryViewModel
 import com.example.ui.screens.onboarding.OnboardingScreen
@@ -67,12 +71,43 @@ class MainActivity : ComponentActivity() {
     private val settingsViewModel: SettingsViewModel by viewModels()
 
     private lateinit var settingsRepository: SettingsRepository
+    private lateinit var mediaProjectionManager: MediaProjectionManager
+
+    private val screenCaptureLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK && result.data != null) {
+            LiveOverlayService.mediaProjectionResultCode = result.resultCode
+            LiveOverlayService.mediaProjectionData = result.data
+            val intent = Intent(this, LiveOverlayService::class.java).apply {
+                action = LiveOverlayService.ACTION_START_WITH_PROJECTION
+                putExtra(LiveOverlayService.EXTRA_RESULT_CODE, result.resultCode)
+                putExtra(LiveOverlayService.EXTRA_RESULT_DATA, result.data)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
+            liveOverlayViewModel.loadState()
+        }
+    }
+
+    fun requestScreenCapture() {
+        try {
+            val intent = mediaProjectionManager.createScreenCaptureIntent()
+            screenCaptureLauncher.launch(intent)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         settingsRepository = SettingsRepository(this)
+        mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
         var initialTab = AppTab.PRACTICE
 
@@ -123,6 +158,7 @@ class MainActivity : ComponentActivity() {
                             )
                             AppTab.OVERLAY -> LiveOverlayScreen(
                                 viewModel = liveOverlayViewModel,
+                                onRequestScreenCapture = { requestScreenCapture() },
                                 onNavigateToPracticeWithReconstruction = {
                                     val pgn = liveOverlayViewModel.uiState.value.reconstructedPgn
                                     if (pgn.isNotBlank()) {
@@ -162,6 +198,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIncomingIntent(intent: Intent, onTabSelected: ((AppTab) -> Unit)? = null) {
+        if (intent.action == "ACTION_REQUEST_SCREEN_CAPTURE") {
+            onTabSelected?.invoke(AppTab.OVERLAY)
+            requestScreenCapture()
+            return
+        }
+
         // App Shortcut handling
         val shortcutDest = intent.getStringExtra("SHORTCUT_DESTINATION")
         if (shortcutDest != null) {

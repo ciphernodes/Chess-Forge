@@ -49,12 +49,12 @@
                 android:resource="@xml/shortcuts" />
         </activity>
 
-        <!-- Live Overlay Foreground Service (Section 4.1) -->
+        <!-- Live Overlay Foreground Service with Screen Capture & Vision (Section 4.1) -->
         <service
             android:name=".service.LiveOverlayService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="specialUse">
+            android:foregroundServiceType="mediaProjection|specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Chess analysis live floating assistant" />

@@ -79,6 +79,7 @@ import com.example.ui.components.ChessBoardView
 @Composable
 fun LiveOverlayScreen(
     viewModel: LiveOverlayViewModel,
+    onRequestScreenCapture: () -> Unit = {},
     onNavigateToPracticeWithReconstruction: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -147,7 +148,9 @@ fun LiveOverlayScreen(
                             fontSize = 18.sp
                         )
                         Text(
-                            text = if (state.isServiceRunning) "System Window Active" else "Interactive Sandbox Active",
+                            text = if (state.isServiceRunning) {
+                                if (state.isScreenCaptureActive) "Active • Screen Scanner Live" else "Active • Floating Window"
+                            } else "Interactive Sandbox Active",
                             fontSize = 11.sp,
                             color = if (state.isServiceRunning) Color(0xFF00E676) else MaterialTheme.colorScheme.primary
                         )
@@ -197,7 +200,7 @@ fun LiveOverlayScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = if (state.isServiceRunning) "SYSTEM OVERLAY ACTIVE" else "LIVE OVERLAY SANDBOX",
+                                text = if (state.isServiceRunning) "SYSTEM OVERLAY ACTIVE" else "LIVE OVERLAY & SCANNER",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 13.sp,
                                 color = if (state.isServiceRunning) Color(0xFF1B5E20) else MaterialTheme.colorScheme.onSurface
@@ -225,62 +228,81 @@ fun LiveOverlayScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Projects best-move arrows over any chess app. All screen touches pass directly through so you can play without interference. Set the board position first to match your screen.",
+                        text = "Scans your live Chess.com / Lichess screen in real-time and draws glowing Stockfish best-move arrows over your pieces. Touches pass through freely.",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         lineHeight = 17.sp
                     )
 
                     Spacer(modifier = Modifier.height(12.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        if (state.isServiceRunning) {
+                    if (state.isServiceRunning) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
                             Button(
-                                onClick = { viewModel.stopOverlayService() },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("stop_overlay_button")
+                                onClick = { viewModel.triggerManualScan() },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0D9488)),
+                                modifier = Modifier.weight(1f).testTag("scan_board_button")
                             ) {
-                                Icon(Icons.Default.Stop, contentDescription = "Stop", modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.Refresh, contentDescription = "Scan", modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Stop Overlay")
+                                Text("Scan Board Now")
                             }
 
                             OutlinedButton(
                                 onClick = { viewModel.startCalibrationMode() },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("recalibrate_overlay_button")
+                                modifier = Modifier.weight(1f).testTag("recalibrate_overlay_button")
                             ) {
                                 Icon(Icons.Default.CropFree, contentDescription = "Set Board", modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
                                 Text("Re-Set Board")
                             }
-                        } else {
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = { viewModel.stopOverlayService() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
+                            modifier = Modifier.fillMaxWidth().testTag("stop_overlay_button")
+                        ) {
+                            Icon(Icons.Default.Stop, contentDescription = "Stop", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Stop Overlay")
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
                             Button(
-                                onClick = { viewModel.startOverlayService() },
+                                onClick = {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
+                                        val intent = Intent(
+                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                            Uri.parse("package:${context.packageName}")
+                                        )
+                                        context.startActivity(intent)
+                                    } else {
+                                        onRequestScreenCapture()
+                                        viewModel.startOverlayService()
+                                    }
+                                },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0D9488)),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("start_overlay_button")
+                                modifier = Modifier.weight(1.3f).testTag("start_overlay_button")
                             ) {
                                 Icon(Icons.Default.PlayArrow, contentDescription = "Start", modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Start Overlay")
+                                Text("Start & Screen Scan")
                             }
 
                             OutlinedButton(
                                 onClick = { viewModel.startCalibrationMode() },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("calibrate_overlay_button")
+                                modifier = Modifier.weight(1f).testTag("calibrate_overlay_button")
                             ) {
                                 Icon(Icons.Default.CropFree, contentDescription = "Set Board", modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Set Board Position")
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Set Board")
                             }
                         }
                     }

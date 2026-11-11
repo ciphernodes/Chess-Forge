@@ -47,6 +47,7 @@ data class LiveOverlayUiState(
     val reconstructedPgn: String = "",
     val reconstructedMovesCount: Int = 0,
     val showReconstructOffer: Boolean = false,
+    val isScreenCaptureActive: Boolean = false,
     val statusMessage: String? = null
 )
 
@@ -76,6 +77,7 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
         _uiState.value = _uiState.value.copy(
             isServiceRunning = LiveOverlayService.isRunning,
             hasOverlayPermission = hasOverlay,
+            isScreenCaptureActive = LiveOverlayService.isProjectionActive,
             settings = currentSettings
         )
     }
@@ -252,6 +254,17 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
         val s = _uiState.value.settings.copy(isBoardFlipped = flipped)
         settingsRepository.updateSettings(s)
         _uiState.value = _uiState.value.copy(settings = s)
+    }
+
+    fun triggerManualScan() {
+        val context = getApplication<Application>()
+        val intent = Intent(context, LiveOverlayService::class.java).apply {
+            action = LiveOverlayService.ACTION_CAPTURE_NOW
+        }
+        context.startService(intent)
+        _uiState.value = _uiState.value.copy(
+            statusMessage = "Scanning chessboard position in Chess.com..."
+        )
     }
 
     fun stopOverlayService() {

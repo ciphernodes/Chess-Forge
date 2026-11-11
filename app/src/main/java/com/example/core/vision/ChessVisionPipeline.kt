@@ -121,7 +121,7 @@ class ChessVisionPipeline {
         }
 
         val requiresConfirmation = overallConf in 0.75f..0.89f
-        val isRejected = overallConf < 0.75f
+        val isRejected = overallConf < 0.60f
 
         VisionResult(
             position = position,
@@ -142,18 +142,30 @@ class ChessVisionPipeline {
     private data class ClassifyResult(val piece: Piece?, val confidence: Float)
 
     private fun classifySquare(sqBmp: Bitmap): ClassifyResult {
-        // High-precision pixel luminance and feature extraction across center region
         val w = sqBmp.width
         val h = sqBmp.height
+        if (w < 6 || h < 6) return ClassifyResult(null, 0.9f)
+
+        // 1. Sample background square color from the 4 corners (away from pieces)
+        val c1 = sqBmp.getPixel(2, 2)
+        val c2 = sqBmp.getPixel(w - 3, 2)
+        val c3 = sqBmp.getPixel(2, h - 3)
+        val c4 = sqBmp.getPixel(w - 3, h - 3)
+        val bgLum = ((0.299 * Color.red(c1) + 0.587 * Color.green(c1) + 0.114 * Color.blue(c1)) +
+                (0.299 * Color.red(c2) + 0.587 * Color.green(c2) + 0.114 * Color.blue(c2)) +
+                (0.299 * Color.red(c3) + 0.587 * Color.green(c3) + 0.114 * Color.blue(c3)) +
+                (0.299 * Color.red(c4) + 0.587 * Color.green(c4) + 0.114 * Color.blue(c4))) / 4.0
+
+        // 2. Scan central piece area (from 15% to 85%)
         val startX = (w * 0.15f).toInt()
         val endX = (w * 0.85f).toInt()
         val startY = (h * 0.15f).toInt()
         val endY = (h * 0.85f).toInt()
 
-        var brightPixels = 0
-        var darkPixels = 0
+        var piecePixels = 0
+        var whitePixels = 0
+        var blackPixels = 0
         var total = 0
-        var avgLum = 0.0
 
         for (y in startY until endY step 2) {
             for (x in startX until endX step 2) {
@@ -162,39 +174,43 @@ class ChessVisionPipeline {
                 val g = Color.green(pixel)
                 val b = Color.blue(pixel)
                 val lum = 0.299 * r + 0.587 * g + 0.114 * b
-                avgLum += lum
                 total++
 
-                if (lum > 180) brightPixels++
-                else if (lum < 75) darkPixels++
+                // Pixel differs noticeably from square background color
+                if (abs(lum - bgLum) > 30) {
+                    piecePixels++
+                    if (lum > 140) {
+                        whitePixels++
+                    } else if (lum < 95) {
+                        blackPixels++
+                    }
+                }
             }
         }
-        avgLum /= max(1, total)
 
-        val contrastRatio = (brightPixels + darkPixels).toFloat() / max(1, total)
+        val pieceCoverage = piecePixels.toFloat() / max(1, total)
 
-        // If variance is low, square is empty
-        if (contrastRatio < 0.12f) {
+        // If piece coverage is very low, the square is empty
+        if (pieceCoverage < 0.10f) {
             return ClassifyResult(null, 0.96f)
         }
 
-        // Determine piece color: compare bright vs dark pixel concentration
-        val isWhitePiece = brightPixels >= darkPixels
+        // Color determination: white if white pixels dominate, black if dark pixels dominate
+        val isWhitePiece = whitePixels >= blackPixels
         val color = if (isWhitePiece) PieceColor.WHITE else PieceColor.BLACK
 
-        // Heuristic geometry extraction (height profile, density)
-        val density = contrastRatio
+        // Piece type estimation by size and density
         val type = when {
-            density > 0.45f -> PieceType.QUEEN
-            density > 0.38f -> PieceType.KING
-            density > 0.30f -> PieceType.ROOK
-            density > 0.24f -> PieceType.BISHOP
-            density > 0.18f -> PieceType.KNIGHT
+            pieceCoverage > 0.44f -> PieceType.QUEEN
+            pieceCoverage > 0.38f -> PieceType.KING
+            pieceCoverage > 0.31f -> PieceType.ROOK
+            pieceCoverage > 0.24f -> PieceType.BISHOP
+            pieceCoverage > 0.17f -> PieceType.KNIGHT
             else -> PieceType.PAWN
         }
 
-        val confidence = (0.82f + min(0.16f, density)).coerceIn(0.70f, 0.98f)
-        return ClassifyResult(Piece(type, color), confidence)
+        val conf = (0.80f + min(0.18f, pieceCoverage)).coerceIn(0.70f, 0.98f)
+        return ClassifyResult(Piece(type, color), conf)
     }
 
     private fun enhanceContrast(src: Bitmap): Bitmap {
@@ -332,10 +348,21 @@ class ChessVisionPipeline {
     }
 
     private fun cropAndScaleBoard(bitmap: Bitmap, rect: RectF): Bitmap {
-        val left = rect.left.toInt().coerceIn(0, bitmap.width - 1)
-        val top = rect.top.toInt().coerceIn(0, bitmap.height - 1)
-        val w = rect.width().toInt().coerceIn(1, bitmap.width - left)
-        val h = rect.height().toInt().coerceIn(1, bitmap.height - top)
+        val pixelRect = if (rect.right <= 1.0f && rect.bottom <= 1.0f && rect.right > 0f) {
+            RectF(
+                rect.left * bitmap.width,
+                rect.top * bitmap.height,
+                rect.right * bitmap.width,
+                rect.bottom * bitmap.height
+            )
+        } else {
+            rect
+        }
+
+        val left = pixelRect.left.toInt().coerceIn(0, bitmap.width - 2)
+        val top = pixelRect.top.toInt().coerceIn(0, bitmap.height - 2)
+        val w = pixelRect.width().toInt().coerceIn(2, bitmap.width - left)
+        val h = pixelRect.height().toInt().coerceIn(2, bitmap.height - top)
         val cropped = Bitmap.createBitmap(bitmap, left, top, w, h)
         return Bitmap.createScaledBitmap(cropped, 400, 400, true)
     }
