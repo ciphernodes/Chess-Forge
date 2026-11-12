@@ -276,6 +276,30 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
         _uiState.value = _uiState.value.copy(settings = s)
     }
 
+    fun updateEngineThreads(threads: Int) {
+        val s = _uiState.value.settings.copy(engineThreads = threads.coerceIn(1, 4))
+        settingsRepository.updateSettings(s)
+        _uiState.value = _uiState.value.copy(settings = s)
+    }
+
+    fun updateStockfishSkillLevel(level: Int) {
+        val s = _uiState.value.settings.copy(stockfishSkillLevel = level.coerceIn(0, 20))
+        settingsRepository.updateSettings(s)
+        _uiState.value = _uiState.value.copy(settings = s)
+    }
+
+    fun updateEngineDepth(depth: Int) {
+        val s = _uiState.value.settings.copy(customDepth = depth.coerceIn(5, 25))
+        settingsRepository.updateSettings(s)
+        _uiState.value = _uiState.value.copy(settings = s)
+    }
+
+    fun toggleAutoDetectBoardOnCapture(auto: Boolean) {
+        val s = _uiState.value.settings.copy(autoDetectBoardOnCapture = auto)
+        settingsRepository.updateSettings(s)
+        _uiState.value = _uiState.value.copy(settings = s)
+    }
+
     fun triggerManualScan() {
         val context = getApplication<Application>()
         com.example.service.ChessScreenCaptureService.requestScan(context)

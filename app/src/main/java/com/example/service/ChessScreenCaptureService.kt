@@ -197,6 +197,14 @@ class ChessScreenCaptureService : Service() {
             val dpi = metrics.densityDpi
 
             imageReader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
+            imageReader?.setOnImageAvailableListener({ _ ->
+                if (isCapturing) {
+                    serviceScope.launch {
+                        try { performCalibratedRegionScan(forceScan = false) } catch (_: Exception) {}
+                    }
+                }
+            }, android.os.Handler(android.os.Looper.getMainLooper()))
+
             virtualDisplay = mediaProjection?.createVirtualDisplay(
                 "ChessForgeCalibratedStream",
                 w, h, dpi,
@@ -219,7 +227,11 @@ class ChessScreenCaptureService : Service() {
      */
     suspend fun performCalibratedRegionScan(forceScan: Boolean = false): Boolean = withContext(Dispatchers.Default) {
         val reader = imageReader ?: return@withContext false
-        val image = reader.acquireLatestImage() ?: return@withContext false
+        val image = try {
+            reader.acquireLatestImage() ?: reader.acquireNextImage()
+        } catch (_: Exception) {
+            null
+        } ?: return@withContext false
 
         try {
             val planes = image.planes
@@ -238,8 +250,16 @@ class ChessScreenCaptureService : Service() {
             fullBitmap.copyPixelsFromBuffer(buffer)
             image.close()
 
-            // 1. Get calibrated region defined by user in calibration tool
-            val boardRect = settingsRepository.getEffectiveBoardRect(width.toFloat(), height.toFloat())
+            val currentSettings = settingsRepository.settings.value
+
+            // 1. Get calibrated region (use user saved region or auto-detect chessboard on screen)
+            val boardRect = if (settingsRepository.hasSavedBoardRegion()) {
+                settingsRepository.getEffectiveBoardRect(width.toFloat(), height.toFloat())
+            } else if (currentSettings.autoDetectBoardOnCapture) {
+                visionPipeline.autoDetectChessboardRect(fullBitmap)
+            } else {
+                settingsRepository.getEffectiveBoardRect(width.toFloat(), height.toFloat())
+            }
 
             // 2. Crop strictly to the calibrated chessboard region
             val left = boardRect.left.toInt().coerceIn(0, fullBitmap.width - 2)
@@ -256,7 +276,6 @@ class ChessScreenCaptureService : Service() {
             }
 
             // 4. Process the cropped board with auto player color detection
-            val currentSettings = settingsRepository.settings.value
             val visionResult = visionPipeline.processCroppedBoard(
                 croppedBoard = croppedBoard,
                 isBoardFlipped = currentSettings.isBoardFlipped,

@@ -682,13 +682,29 @@ fun LiveOverlayScreen(
                         }
                     }
 
+                    // Auto-Detect Board Bounding Box on Capture
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Auto-Locate Board Bounding Box", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            Text("Automatically detects chessboard location in Chess.com/Lichess", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(
+                            checked = state.settings.autoDetectBoardOnCapture,
+                            onCheckedChange = { viewModel.toggleAutoDetectBoardOnCapture(it) }
+                        )
+                    }
+
                     // Capture Frame Rate Slider (1-15 FPS, default 5)
                     Column {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("Capture Frame Rate", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Capture Frame Rate (Battery Saver)", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                             Text("${state.settings.overlayFps} FPS", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
                         }
                         Slider(
@@ -751,6 +767,80 @@ fun LiveOverlayScreen(
                         Switch(
                             checked = state.settings.showOverlayTurnIndicator,
                             onCheckedChange = { viewModel.toggleTurnIndicator(it) }
+                        )
+                    }
+                }
+            }
+
+            // STOCKFISH ENGINE PERFORMANCE CARD
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "Stockfish 19 Engine Settings",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                    Text(
+                        text = "Tune search depth, CPU threads, and skill level to optimize analysis speed and battery usage:",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    // Analysis Depth Slider
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Engine Depth", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Depth ${state.settings.customDepth}", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                        }
+                        Slider(
+                            value = state.settings.customDepth.toFloat(),
+                            onValueChange = { viewModel.updateEngineDepth(it.toInt()) },
+                            valueRange = 5f..25f,
+                            steps = 19
+                        )
+                    }
+
+                    // Stockfish Skill Level Slider
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Stockfish Skill Level", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Level ${state.settings.stockfishSkillLevel} / 20", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                        }
+                        Slider(
+                            value = state.settings.stockfishSkillLevel.toFloat(),
+                            onValueChange = { viewModel.updateStockfishSkillLevel(it.toInt()) },
+                            valueRange = 0f..20f,
+                            steps = 19
+                        )
+                    }
+
+                    // CPU Analysis Threads Slider
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("CPU Analysis Threads", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Text("${state.settings.engineThreads} Threads", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                        }
+                        Slider(
+                            value = state.settings.engineThreads.toFloat(),
+                            onValueChange = { viewModel.updateEngineThreads(it.toInt()) },
+                            valueRange = 1f..4f,
+                            steps = 2
                         )
                     }
                 }

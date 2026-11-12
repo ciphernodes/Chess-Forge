@@ -77,6 +77,9 @@ data class UserSettings(
     val isBoardFlipped: Boolean = false, // Black at bottom
     val autoDetectPlayerColor: Boolean = true, // Automatically detect if player is White or Black (ChessMint-style)
     val playerColorOverride: String = "AUTO", // "AUTO", "WHITE", "BLACK"
+    val engineThreads: Int = 2, // 1..4 threads
+    val stockfishSkillLevel: Int = 20, // 0..20 skill level
+    val autoDetectBoardOnCapture: Boolean = true, // Auto-find board bounding box in screen capture
 
     // Active Profile
     val activeProfileName: String = "Study",
@@ -138,6 +141,9 @@ class SettingsRepository(private val context: Context) {
             isBoardFlipped = prefs.getBoolean("isBoardFlipped", false),
             autoDetectPlayerColor = prefs.getBoolean("autoDetectPlayerColor", true),
             playerColorOverride = prefs.getString("playerColorOverride", "AUTO") ?: "AUTO",
+            engineThreads = prefs.getInt("engineThreads", 2),
+            stockfishSkillLevel = prefs.getInt("stockfishSkillLevel", 20),
+            autoDetectBoardOnCapture = prefs.getBoolean("autoDetectBoardOnCapture", true),
             activeProfileName = prefs.getString("activeProfileName", "Study") ?: "Study",
             puzzleRating = prefs.getInt("puzzleRating", 1200),
             puzzlesSolved = prefs.getInt("puzzlesSolved", 0),
@@ -180,6 +186,9 @@ class SettingsRepository(private val context: Context) {
             putBoolean("isBoardFlipped", newSettings.isBoardFlipped)
             putBoolean("autoDetectPlayerColor", newSettings.autoDetectPlayerColor)
             putString("playerColorOverride", newSettings.playerColorOverride)
+            putInt("engineThreads", newSettings.engineThreads)
+            putInt("stockfishSkillLevel", newSettings.stockfishSkillLevel)
+            putBoolean("autoDetectBoardOnCapture", newSettings.autoDetectBoardOnCapture)
             putString("activeProfileName", newSettings.activeProfileName)
             putInt("puzzleRating", newSettings.puzzleRating)
             putInt("puzzlesSolved", newSettings.puzzlesSolved)

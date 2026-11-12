@@ -498,6 +498,52 @@ class ChessVisionPipeline {
     private fun detectBoardHough(bmp: Bitmap): RectF? = null // Handled smoothly via fallback chain
     private fun detectBoardColorSegmentation(bmp: Bitmap): RectF? = null
 
+    fun autoDetectChessboardRect(bmp: Bitmap): RectF {
+        val width = bmp.width.toFloat()
+        val height = bmp.height.toFloat()
+
+        if (width <= 10f || height <= 10f) return defaultCenterSquare(bmp)
+
+        // Standard phone app layout: board spans ~92% to 100% of screen width
+        val boardDim = min(width, height * 0.70f)
+        val left = (width - boardDim) / 2f
+        val sqW = boardDim / 8f
+
+        var bestTop = (height - boardDim) / 2f
+        var maxGridScore = -1f
+
+        val startY = (height * 0.10f).toInt()
+        val endY = (height * 0.90f - boardDim).toInt().coerceAtLeast(startY + 1)
+        val stepY = 12
+
+        for (y in startY..endY step stepY) {
+            var score = 0f
+            val sampleY = (y + boardDim * 0.5f).toInt().coerceIn(0, bmp.height - 1)
+
+            for (col in 0..6) {
+                val cx1 = (left + (col + 0.5f) * sqW).toInt().coerceIn(0, bmp.width - 1)
+                val cx2 = (left + (col + 1.5f) * sqW).toInt().coerceIn(0, bmp.width - 1)
+
+                val p1 = bmp.getPixel(cx1, sampleY)
+                val p2 = bmp.getPixel(cx2, sampleY)
+
+                val lum1 = 0.299 * Color.red(p1) + 0.587 * Color.green(p1) + 0.114 * Color.blue(p1)
+                val lum2 = 0.299 * Color.red(p2) + 0.587 * Color.green(p2) + 0.114 * Color.blue(p2)
+
+                val diff = abs(lum1 - lum2)
+                if (diff in 15.0..180.0) {
+                    score += diff.toFloat()
+                }
+            }
+            if (score > maxGridScore) {
+                maxGridScore = score
+                bestTop = y.toFloat()
+            }
+        }
+
+        return RectF(left, bestTop, left + boardDim, bestTop + boardDim)
+    }
+
     private fun defaultCenterSquare(bmp: Bitmap): RectF {
         val size = min(bmp.width, bmp.height).toFloat()
         val left = (bmp.width - size) / 2f
