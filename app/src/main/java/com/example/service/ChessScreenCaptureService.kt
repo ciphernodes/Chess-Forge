@@ -17,7 +17,9 @@ import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.R
@@ -27,8 +29,11 @@ import com.example.core.chess.EnginePreset
 import com.example.core.chess.Move
 import com.example.core.chess.PieceColor
 import com.example.core.vision.ChessVisionPipeline
+import com.example.core.vision.ChessVisionTFLiteModule
+import com.example.core.chess.StockfishJniEngine
 import com.example.data.repository.SettingsRepository
 import kotlin.math.abs
+import java.nio.ByteBuffer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -63,7 +68,9 @@ class ChessScreenCaptureService : Service() {
     private var imageReader: ImageReader? = null
 
     private val visionPipeline = ChessVisionPipeline()
+    private val cvModule = ChessVisionTFLiteModule()
     private val engine = ChessEngine()
+    private val stockfishEngine = StockfishJniEngine()
     private lateinit var settingsRepository: SettingsRepository
 
     private var loopJob: Job? = null
@@ -86,22 +93,39 @@ class ChessScreenCaptureService : Service() {
         var isCapturing = false
             private set
 
+        private var pendingResultCode: Int = -1
+        private var pendingResultData: Intent? = null
+
+        fun setProjectionData(code: Int, data: Intent?) {
+            pendingResultCode = code
+            pendingResultData = data
+        }
+
         val latestAnalysisResult = MutableStateFlow<CaptureAnalysisResult?>(null)
         private val _scanStatusMessage = MutableStateFlow<String?>("Ready")
         val scanStatusMessage = _scanStatusMessage.asStateFlow()
 
         fun requestScan(context: Context) {
-            val intent = Intent(context, ChessScreenCaptureService::class.java).apply {
-                action = ACTION_CAPTURE_NOW
+            if (!isCapturing) return
+            try {
+                val intent = Intent(context, ChessScreenCaptureService::class.java).apply {
+                    action = ACTION_CAPTURE_NOW
+                }
+                context.startService(intent)
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-            context.startService(intent)
         }
 
         fun stop(context: Context) {
-            val intent = Intent(context, ChessScreenCaptureService::class.java).apply {
-                action = ACTION_STOP
+            try {
+                val intent = Intent(context, ChessScreenCaptureService::class.java).apply {
+                    action = ACTION_STOP
+                }
+                context.startService(intent)
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-            context.startService(intent)
         }
     }
 
@@ -114,35 +138,61 @@ class ChessScreenCaptureService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // ALWAYS satisfy Android foreground service contract immediately
+        startForegroundNotification()
+
         when (intent?.action) {
             ACTION_STOP -> {
+                isCapturing = false
+                try {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } catch (_: Exception) {}
                 stopSelf()
                 return START_NOT_STICKY
             }
             ACTION_CAPTURE_NOW -> {
-                serviceScope.launch {
-                    performCalibratedRegionScan(forceScan = true)
+                if (isCapturing) {
+                    serviceScope.launch {
+                        performCalibratedRegionScan(forceScan = true)
+                    }
                 }
             }
             ACTION_START -> {
-                val code = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
-                val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val code = if (intent.hasExtra(EXTRA_RESULT_CODE)) {
+                    intent.getIntExtra(EXTRA_RESULT_CODE, -1)
+                } else {
+                    pendingResultCode
+                }
+                val data = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
                 } else {
                     @Suppress("DEPRECATION")
                     intent.getParcelableExtra(EXTRA_RESULT_DATA) as? Intent
-                }
+                }) ?: pendingResultData
 
                 if (code != -1 && data != null) {
-                    startForegroundNotification()
                     initMediaProjection(code, data)
                     startAutoCaptureLoop()
                 } else {
+                    // Stop cleanly if no token provided
+                    try {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                    } catch (_: Exception) {}
                     stopSelf()
+                    return START_NOT_STICKY
+                }
+            }
+            else -> {
+                if (!isCapturing && (pendingResultCode == -1 || pendingResultData == null)) {
+                    try {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                    } catch (_: Exception) {}
+                    stopSelf()
+                    return START_NOT_STICKY
                 }
             }
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     private fun createNotificationChannel() {
@@ -160,25 +210,40 @@ class ChessScreenCaptureService : Service() {
     }
 
     private fun startForegroundNotification() {
-        val stopIntent = Intent(this, ChessScreenCaptureService::class.java).apply { action = ACTION_STOP }
-        val stopPending = PendingIntent.getService(this, 10, stopIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        try {
+            val stopIntent = Intent(this, ChessScreenCaptureService::class.java).apply { action = ACTION_STOP }
+            val stopPending = PendingIntent.getService(this, 10, stopIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
-        val openApp = Intent(this, MainActivity::class.java).apply { putExtra("SHORTCUT_DESTINATION", "OVERLAY") }
-        val openPending = PendingIntent.getActivity(this, 11, openApp, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            val openApp = Intent(this, MainActivity::class.java).apply { putExtra("SHORTCUT_DESTINATION", "OVERLAY") }
+            val openPending = PendingIntent.getActivity(this, 11, openApp, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Chess Forge Screen Scanner")
-            .setContentText("Capturing calibrated board region live")
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentIntent(openPending)
-            .setOngoing(true)
-            .addAction(android.R.drawable.ic_media_pause, "Stop", stopPending)
-            .build()
+            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("Chess Forge Screen Scanner")
+                .setContentText("Capturing calibrated board region live")
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentIntent(openPending)
+                .setOngoing(true)
+                .addAction(android.R.drawable.ic_media_pause, "Stop", stopPending)
+                .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            try {
+                val fallbackNotification = NotificationCompat.Builder(this, CHANNEL_ID)
+                    .setContentTitle("Chess Forge Screen Scanner")
+                    .setContentText("Capturing live game")
+                    .setSmallIcon(R.mipmap.ic_launcher)
+                    .setOngoing(true)
+                    .build()
+                startForeground(NOTIFICATION_ID, fallbackNotification)
+            } catch (e2: Exception) {
+                e2.printStackTrace()
+            }
         }
     }
 
@@ -191,20 +256,25 @@ class ChessScreenCaptureService : Service() {
 
             mediaProjection = mpm.getMediaProjection(code, data)
 
+            // In Android 14+ (API 34+), MediaProjection callback is mandatory before creating VirtualDisplay
+            mediaProjection?.registerCallback(object : MediaProjection.Callback() {
+                override fun onStop() {
+                    isCapturing = false
+                    virtualDisplay?.release()
+                    virtualDisplay = null
+                    imageReader?.close()
+                    imageReader = null
+                    mediaProjection = null
+                    _scanStatusMessage.value = "Screen Capture Stopped"
+                }
+            }, Handler(Looper.getMainLooper()))
+
             val metrics = resources.displayMetrics
             val w = metrics.widthPixels
             val h = metrics.heightPixels
             val dpi = metrics.densityDpi
 
             imageReader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
-            imageReader?.setOnImageAvailableListener({ _ ->
-                if (isCapturing) {
-                    serviceScope.launch {
-                        try { performCalibratedRegionScan(forceScan = false) } catch (_: Exception) {}
-                    }
-                }
-            }, android.os.Handler(android.os.Looper.getMainLooper()))
-
             virtualDisplay = mediaProjection?.createVirtualDisplay(
                 "ChessForgeCalibratedStream",
                 w, h, dpi,
@@ -227,11 +297,7 @@ class ChessScreenCaptureService : Service() {
      */
     suspend fun performCalibratedRegionScan(forceScan: Boolean = false): Boolean = withContext(Dispatchers.Default) {
         val reader = imageReader ?: return@withContext false
-        val image = try {
-            reader.acquireLatestImage() ?: reader.acquireNextImage()
-        } catch (_: Exception) {
-            null
-        } ?: return@withContext false
+        val image = reader.acquireLatestImage() ?: return@withContext false
 
         try {
             val planes = image.planes
@@ -240,34 +306,31 @@ class ChessScreenCaptureService : Service() {
             val rowStride = planes[0].rowStride
             val width = image.width
             val height = image.height
-            val rowPadding = rowStride - pixelStride * width
 
-            val fullBitmap = Bitmap.createBitmap(
-                width + rowPadding / pixelStride,
-                height,
-                Bitmap.Config.ARGB_8888
-            )
-            fullBitmap.copyPixelsFromBuffer(buffer)
-            image.close()
+            // 1. Get calibrated region defined by user in calibration tool
+            val boardRect = settingsRepository.getEffectiveBoardRect(width.toFloat(), height.toFloat())
 
-            val currentSettings = settingsRepository.settings.value
+            // 2. Crop strictly to the calibrated chessboard region directly from the buffer
+            // Safe direct buffer crop avoids huge allocations and never throws Buffer not large enough
+            val left = boardRect.left.toInt().coerceIn(0, width - 2)
+            val top = boardRect.top.toInt().coerceIn(0, height - 2)
+            val w = boardRect.width().toInt().coerceIn(2, width - left)
+            val h = boardRect.height().toInt().coerceIn(2, height - top)
 
-            // 1. Get calibrated region (use user saved region or auto-detect chessboard on screen)
-            val boardRect = if (settingsRepository.hasSavedBoardRegion()) {
-                settingsRepository.getEffectiveBoardRect(width.toFloat(), height.toFloat())
-            } else if (currentSettings.autoDetectBoardOnCapture) {
-                visionPipeline.autoDetectChessboardRect(fullBitmap)
-            } else {
-                settingsRepository.getEffectiveBoardRect(width.toFloat(), height.toFloat())
+            val croppedBoard = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            val rowBytes = w * pixelStride
+            val rowByteArray = ByteArray(rowBytes)
+            val directBuffer = ByteBuffer.allocate(w * h * 4)
+
+            for (y in 0 until h) {
+                val offset = (top + y) * rowStride + left * pixelStride
+                buffer.position(offset)
+                buffer.get(rowByteArray, 0, rowBytes)
+                directBuffer.put(rowByteArray, 0, rowBytes)
             }
-
-            // 2. Crop strictly to the calibrated chessboard region
-            val left = boardRect.left.toInt().coerceIn(0, fullBitmap.width - 2)
-            val top = boardRect.top.toInt().coerceIn(0, fullBitmap.height - 2)
-            val w = boardRect.width().toInt().coerceIn(2, fullBitmap.width - left)
-            val h = boardRect.height().toInt().coerceIn(2, fullBitmap.height - top)
-
-            val croppedBoard = Bitmap.createBitmap(fullBitmap, left, top, w, h)
+            directBuffer.rewind()
+            croppedBoard.copyPixelsFromBuffer(directBuffer)
+            image.close()
 
             // 3. Fast board signature: If the board hasn't changed since last frame, skip re-evaluating!
             val currentSig = computeBoardSignature(croppedBoard)
@@ -275,14 +338,14 @@ class ChessScreenCaptureService : Service() {
                 return@withContext true
             }
 
-            // 4. Process the cropped board with auto player color detection
-            val visionResult = visionPipeline.processCroppedBoard(
+            // 4. Process the cropped board with TensorFlow Lite Computer Vision module
+            val currentSettings = settingsRepository.settings.value
+            val recognition = cvModule.processBoardBitmap(
                 croppedBoard = croppedBoard,
-                isBoardFlipped = currentSettings.isBoardFlipped,
                 colorOverride = currentSettings.playerColorOverride,
                 previousPosition = previousScannedPosition
             )
-            val pos = visionResult.position
+            val pos = recognition.position
 
             val pieceCount = pos.board.count { it != null }
             if (pieceCount >= 4) {
@@ -299,15 +362,13 @@ class ChessScreenCaptureService : Service() {
                 // Cancel any previous running engine search immediately so new move is computed with zero delay
                 engineJob?.cancel()
                 val job = serviceScope.launch {
-                    val preset = currentSettings.enginePreset
-                    val res = engine.analyze(
+                    val res = stockfishEngine.calculateBestMove(
                         position = pos,
-                        preset = EnginePreset.FAST, // Real-time fast evaluation (<250ms)
-                        customDepth = 12,
-                        customMovetimeMs = 250L
+                        depth = 12,
+                        movetimeMs = 250L
                     )
                     if (res.bestMove != null) {
-                        val status = if (visionResult.isPlayerTurn) {
+                        val status = if (recognition.isPlayerTurn) {
                             "Best: ${res.bestMoveSan} (${res.displayScore})"
                         } else {
                             "Opponent to move (${res.bestMoveSan})"
@@ -319,9 +380,9 @@ class ChessScreenCaptureService : Service() {
                             bestMoveSan = res.bestMoveSan,
                             evalCp = res.evaluationCp,
                             evalDisplay = res.displayScore,
-                            isWhiteAtBottom = visionResult.isWhiteAtBottom,
-                            playerColor = visionResult.playerColor,
-                            isPlayerTurn = visionResult.isPlayerTurn,
+                            isWhiteAtBottom = recognition.isWhiteAtBottom,
+                            playerColor = recognition.playerColor,
+                            isPlayerTurn = recognition.isPlayerTurn,
                             activeColor = pos.activeColor,
                             statusMessage = status
                         )
@@ -378,14 +439,15 @@ class ChessScreenCaptureService : Service() {
     private fun startAutoCaptureLoop() {
         loopJob?.cancel()
         loopJob = serviceScope.launch {
-            // Real-time continuous scanning loop: checks board frame at 4 FPS
             while (true) {
                 if (isCapturing && imageReader != null) {
                     try {
                         performCalibratedRegionScan(forceScan = false)
                     } catch (_: Exception) {}
                 }
-                delay(250)
+                val fps = settingsRepository.settings.value.overlayFps.coerceIn(1, 10)
+                val delayMs = (1000L / fps).coerceIn(100L, 1000L)
+                delay(delayMs)
             }
         }
     }

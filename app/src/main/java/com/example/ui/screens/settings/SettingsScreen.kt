@@ -292,50 +292,79 @@ fun SettingsScreen(
                         lineHeight = 17.sp
                     )
 
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // MediaProjection Frame Capture Rate Control (Battery Optimization)
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                            .padding(12.dp)
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "Frame Capture Frequency (Battery Saver)",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column {
-                                Text(
-                                    text = "Capture Frame Rate (FPS)",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    text = "Lower FPS saves battery; higher FPS speeds up turn detection",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                        listOf(
+                            Triple(2, "🔋 Saver", "2 FPS"),
+                            Triple(5, "⚖️ Balanced", "5 FPS"),
+                            Triple(10, "⚡ Fast", "10 FPS")
+                        ).forEach { (fps, label, subtitle) ->
+                            val isSelected = settings.overlayFps == fps
+                            Surface(
+                                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { viewModel.updateOverlayFps(fps) }
+                                    .testTag("fps_preset_${fps}")
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp)
+                                ) {
+                                    Text(
+                                        text = label,
+                                        fontSize = 12.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = subtitle,
+                                        fontSize = 10.sp,
+                                        color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                    )
+                                }
                             }
-                            Text(
-                                text = "${settings.overlayFps} FPS",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
                         }
-                        Slider(
-                            value = settings.overlayFps.toFloat(),
-                            onValueChange = { viewModel.updateFps(it.toInt()) },
-                            valueRange = 1f..15f,
-                            steps = 13,
-                            modifier = Modifier.testTag("overlay_fps_slider")
-                        )
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Fine Tune: ${settings.overlayFps} FPS",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = if (settings.overlayFps <= 2) "Low battery use" else if (settings.overlayFps <= 5) "Standard" else "High responsiveness",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (settings.overlayFps <= 2) Color(0xFF2E7D32) else if (settings.overlayFps <= 5) Color(0xFF0284C7) else Color(0xFFD97706)
+                        )
+                    }
+                    Slider(
+                        value = settings.overlayFps.toFloat(),
+                        onValueChange = { viewModel.updateOverlayFps(it.toInt()) },
+                        valueRange = 1f..15f,
+                        steps = 13,
+                        modifier = Modifier.testTag("fps_slider")
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
                     OutlinedButton(
                         onClick = { viewModel.startCalibrationMode() },
                         modifier = Modifier.fillMaxWidth().testTag("calibrate_board_settings_button")

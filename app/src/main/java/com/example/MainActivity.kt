@@ -77,26 +77,37 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK && result.data != null) {
+            // Set projection data in companion object for seamless process access
+            com.example.service.ChessScreenCaptureService.setProjectionData(result.resultCode, result.data)
+
             // 1. Start dedicated screen capture service with MediaProjection token
             val captureIntent = Intent(this, com.example.service.ChessScreenCaptureService::class.java).apply {
                 action = com.example.service.ChessScreenCaptureService.ACTION_START
                 putExtra(com.example.service.ChessScreenCaptureService.EXTRA_RESULT_CODE, result.resultCode)
                 putExtra(com.example.service.ChessScreenCaptureService.EXTRA_RESULT_DATA, result.data)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(captureIntent)
-            } else {
-                startService(captureIntent)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(captureIntent)
+                } else {
+                    startService(captureIntent)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
 
             // 2. Start floating overlay UI service
             val overlayIntent = Intent(this, LiveOverlayService::class.java).apply {
                 action = LiveOverlayService.ACTION_START
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(overlayIntent)
-            } else {
-                startService(overlayIntent)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(overlayIntent)
+                } else {
+                    startService(overlayIntent)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
             liveOverlayViewModel.loadState()
         }

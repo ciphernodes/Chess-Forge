@@ -69,11 +69,11 @@ class LiveOverlayService : Service() {
     private val gameReconstructor = GameReconstructor()
     private lateinit var settingsRepository: SettingsRepository
 
-    private var currentPosition: ChessPosition = ChessPosition.fromFen("r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 4 5")
-    private var currentBestMove: Move? = Move(Square(4, 1), Square(4, 3)) // default e2-e4
-    private var currentBestMoveSan: String = "e4"
-    private var currentEvalCp: Int = 35
-    private var currentEvalDisplay: String = "+0.35"
+    private var currentPosition: ChessPosition? = null
+    private var currentBestMove: Move? = null
+    private var currentBestMoveSan: String = "Scanning..."
+    private var currentEvalCp: Int = 0
+    private var currentEvalDisplay: String = "..."
     private var isWhiteAtBottom: Boolean = true
     private var playerColor: PieceColor = PieceColor.WHITE
     private var isPlayerTurn: Boolean = true
@@ -136,24 +136,18 @@ class LiveOverlayService : Service() {
             }
         }
 
-        // Pre-analyze initial position so an arrow is rendered immediately
-        serviceScope.launch {
-            try {
-                val res = engine.analyze(currentPosition, settingsRepository.settings.value.enginePreset)
-                if (res.bestMove != null) {
-                    currentBestMove = res.bestMove
-                    currentEvalCp = res.evaluationCp
-                    currentEvalDisplay = res.displayScore
-                    currentBestMoveSan = res.bestMoveSan
-                    arrowWindowView?.invalidate()
-                }
-            } catch (_: Exception) {}
+        // Trigger immediate live frame scan if screen capture service is running
+        if (ChessScreenCaptureService.isCapturing) {
+            ChessScreenCaptureService.requestScan(this)
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                try {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } catch (_: Exception) {}
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -191,7 +185,12 @@ class LiveOverlayService : Service() {
                 startForeground(NOTIFICATION_ID, notification)
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            try {
+                val notification = buildNotification()
+                startForeground(NOTIFICATION_ID, notification)
+            } catch (e2: Exception) {
+                e2.printStackTrace()
+            }
         }
     }
 
@@ -442,14 +441,14 @@ class LiveOverlayService : Service() {
         }
 
         val autoCenterBtn = Button(this).apply {
-            text = "⚡ Auto Detect"
+            text = "Center Box"
             textSize = 12f
             setOnClickListener {
-                settingsRepository.clearBoardRegion()
-                ChessScreenCaptureService.requestScan(this@LiveOverlayService)
-                Toast.makeText(this@LiveOverlayService, "Auto-detecting chessboard bounds...", Toast.LENGTH_SHORT).show()
-                dismissCalibrationOverlay()
-                startActiveOverlay()
+                val size = (screenW * 0.94f).coerceAtMost(screenH * 0.55f)
+                val l = (screenW - size) / 2f
+                val t = (screenH - size) / 2f
+                activeRect.set(l, t, l + size, t + size)
+                calibrationView.invalidate()
             }
         }
         rowOptions.addView(autoCenterBtn)
@@ -588,7 +587,7 @@ class LiveOverlayService : Service() {
 
             override fun onDraw(canvas: Canvas) {
                 super.onDraw(canvas)
-                val move = currentBestMove ?: Move(Square(4, 1), Square(4, 3))
+                val move = currentBestMove ?: return
 
                 val screenW = if (width > 0) width.toFloat() else resources.displayMetrics.widthPixels.toFloat()
                 val screenH = if (height > 0) height.toFloat() else resources.displayMetrics.heightPixels.toFloat()
@@ -614,7 +613,7 @@ class LiveOverlayService : Service() {
                 val targetX = endX - (cos(angle) * headSize * 0.35f)
                 val targetY = endY - (sin(angle) * headSize * 0.35f)
 
-                val isCapture = move.isCapture || currentPosition.get(move.to) != null
+                val isCapture = move.isCapture || (currentPosition?.get(move.to) != null)
                 val isCheck = currentBestMoveSan.contains("+") || currentBestMoveSan.contains("#")
                 val arrowColor = when {
                     !isPlayerTurn -> Color.parseColor("#FF9100") // Distinct amber threat/anticipation for opponent

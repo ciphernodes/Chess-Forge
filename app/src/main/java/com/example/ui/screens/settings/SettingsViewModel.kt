@@ -183,6 +183,11 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         save(updated)
     }
 
+    fun updateOverlayFps(fps: Int) {
+        val updated = _settings.value.copy(overlayFps = fps.coerceIn(1, 15))
+        save(updated)
+    }
+
     fun updateAppTheme(theme: String) {
         val updated = _settings.value.copy(appTheme = theme)
         save(updated)
@@ -228,11 +233,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             settingsRepository.clearBoardRegion()
             _statusMessage.value = "All local data reset"
         }
-    }
-
-    fun updateFps(fps: Int) {
-        val updated = _settings.value.copy(overlayFps = fps)
-        save(updated)
     }
 
     private fun save(newSettings: UserSettings) {
