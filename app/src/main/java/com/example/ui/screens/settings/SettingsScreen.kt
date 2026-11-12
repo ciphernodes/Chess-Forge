@@ -292,6 +292,49 @@ fun SettingsScreen(
                         lineHeight = 17.sp
                     )
 
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // MediaProjection Frame Capture Rate Control (Battery Optimization)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            .padding(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Capture Frame Rate (FPS)",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "Lower FPS saves battery; higher FPS speeds up turn detection",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(
+                                text = "${settings.overlayFps} FPS",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Slider(
+                            value = settings.overlayFps.toFloat(),
+                            onValueChange = { viewModel.updateFps(it.toInt()) },
+                            valueRange = 1f..15f,
+                            steps = 13,
+                            modifier = Modifier.testTag("overlay_fps_slider")
+                        )
+                    }
+
                     Spacer(modifier = Modifier.height(10.dp))
                     OutlinedButton(
                         onClick = { viewModel.startCalibrationMode() },

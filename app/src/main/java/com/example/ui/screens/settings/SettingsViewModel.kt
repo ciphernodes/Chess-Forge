@@ -230,6 +230,11 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun updateFps(fps: Int) {
+        val updated = _settings.value.copy(overlayFps = fps)
+        save(updated)
+    }
+
     private fun save(newSettings: UserSettings) {
         _settings.value = newSettings
         settingsRepository.updateSettings(newSettings)
