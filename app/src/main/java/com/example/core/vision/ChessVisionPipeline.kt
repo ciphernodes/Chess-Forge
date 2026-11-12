@@ -504,39 +504,52 @@ class ChessVisionPipeline {
 
         if (width <= 10f || height <= 10f) return defaultCenterSquare(bmp)
 
-        // Standard phone app layout: board spans ~92% to 100% of screen width
         val boardDim = min(width, height * 0.70f)
         val left = (width - boardDim) / 2f
         val sqW = boardDim / 8f
 
         var bestTop = (height - boardDim) / 2f
-        var maxGridScore = -1f
+        var maxGridScore = -Float.MAX_VALUE
 
-        val startY = (height * 0.10f).toInt()
-        val endY = (height * 0.90f - boardDim).toInt().coerceAtLeast(startY + 1)
-        val stepY = 12
+        val startY = (height * 0.08f).toInt()
+        val endY = (height * 0.92f - boardDim).toInt().coerceAtLeast(startY + 1)
+        val stepY = 4 // Fine 4px step for pixel-perfect vertical alignment
 
         for (y in startY..endY step stepY) {
-            var score = 0f
-            val sampleY = (y + boardDim * 0.5f).toInt().coerceIn(0, bmp.height - 1)
+            val lightLums = mutableListOf<Double>()
+            val darkLums = mutableListOf<Double>()
 
-            for (col in 0..6) {
-                val cx1 = (left + (col + 0.5f) * sqW).toInt().coerceIn(0, bmp.width - 1)
-                val cx2 = (left + (col + 1.5f) * sqW).toInt().coerceIn(0, bmp.width - 1)
+            for (r in 0..7) {
+                for (c in 0..7) {
+                    val px = (left + (c + 0.25f) * sqW).toInt().coerceIn(0, bmp.width - 1)
+                    val py = (y + (r + 0.25f) * sqW).toInt().coerceIn(0, bmp.height - 1)
+                    val pixel = bmp.getPixel(px, py)
+                    val lum = 0.299 * Color.red(pixel) + 0.587 * Color.green(pixel) + 0.114 * Color.blue(pixel)
 
-                val p1 = bmp.getPixel(cx1, sampleY)
-                val p2 = bmp.getPixel(cx2, sampleY)
-
-                val lum1 = 0.299 * Color.red(p1) + 0.587 * Color.green(p1) + 0.114 * Color.blue(p1)
-                val lum2 = 0.299 * Color.red(p2) + 0.587 * Color.green(p2) + 0.114 * Color.blue(p2)
-
-                val diff = abs(lum1 - lum2)
-                if (diff in 15.0..180.0) {
-                    score += diff.toFloat()
+                    if ((r + c) % 2 == 0) {
+                        lightLums.add(lum)
+                    } else {
+                        darkLums.add(lum)
+                    }
                 }
             }
+
+            val avgLight = lightLums.average()
+            val avgDark = darkLums.average()
+            val contrast = abs(avgLight - avgDark)
+
+            var varLight = 0.0
+            for (l in lightLums) varLight += (l - avgLight) * (l - avgLight)
+            varLight /= lightLums.size
+
+            var varDark = 0.0
+            for (d in darkLums) varDark += (d - avgDark) * (d - avgDark)
+            varDark /= darkLums.size
+
+            val score = (contrast * 3.0) - (Math.sqrt(varLight) + Math.sqrt(varDark))
+
             if (score > maxGridScore) {
-                maxGridScore = score
+                maxGridScore = score.toFloat()
                 bestTop = y.toFloat()
             }
         }

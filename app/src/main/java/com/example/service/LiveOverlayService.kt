@@ -442,14 +442,14 @@ class LiveOverlayService : Service() {
         }
 
         val autoCenterBtn = Button(this).apply {
-            text = "Center Box"
+            text = "⚡ Auto Detect"
             textSize = 12f
             setOnClickListener {
-                val size = (screenW * 0.94f).coerceAtMost(screenH * 0.55f)
-                val l = (screenW - size) / 2f
-                val t = (screenH - size) / 2f
-                activeRect.set(l, t, l + size, t + size)
-                calibrationView.invalidate()
+                settingsRepository.clearBoardRegion()
+                ChessScreenCaptureService.requestScan(this@LiveOverlayService)
+                Toast.makeText(this@LiveOverlayService, "Auto-detecting chessboard bounds...", Toast.LENGTH_SHORT).show()
+                dismissCalibrationOverlay()
+                startActiveOverlay()
             }
         }
         rowOptions.addView(autoCenterBtn)
