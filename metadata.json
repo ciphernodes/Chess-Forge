@@ -1,0 +1,6 @@
+{
+  "name": "Chess Forge",
+  "description": "Manifest V3 browser extension for Lichess.org and Chess.com with SVG arrow overlays, live Multi-PV chess engine, and Android companion browser & ZIP exporter.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

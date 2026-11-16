@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chess Forge</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <main class="panel">
+    <header class="header">
+      <div class="brand">
+        <span id="status-dot" class="dot"></span>
+        <div>
+          <h1>Chess Forge</h1>
+          <p id="status-label">Stockfish 19 WASM • Ready</p>
+        </div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="toggle-enabled" checked />
+        <span class="slider"></span>
+      </label>
+    </header>
+
+    <section class="eval-wrap">
+      <div class="eval-track">
+        <div id="eval-fill" class="eval-fill" style="width: 50%"></div>
+      </div>
+      <span id="eval-score" class="eval-score">0.0</span>
+    </section>
+
+    <section class="card">
+      <div class="card-title">
+        <span>Opening Book (Masters DB)</span>
+        <span id="theme-badge" class="pill-tag">Theme: Auto</span>
+      </div>
+      <div id="book-header" class="book-title">Starting Position • Waiting…</div>
+      <div id="book-moves" class="lines">
+        <p class="muted">Master theory moves appear here during openings.</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-title">
+        <span id="backend-label">Stockfish 19 Analysis</span>
+        <button id="btn-reanalyze" type="button">Analyze</button>
+      </div>
+      <div id="lines-container" class="lines">
+        <p class="muted">Open a Lichess.org or Chess.com board tab to stream Stockfish WASM evaluations.</p>
+      </div>
+      <div id="fen-box" class="fen">FEN: --</div>
+    </section>
+
+    <section class="card">
+      <div class="row">
+        <label for="select-cpu">CPU Profile</label>
+        <select id="select-cpu">
+          <option value="eco">Eco (32 MB)</option>
+          <option value="balanced" selected>Balanced (64 MB)</option>
+          <option value="turbo">Turbo Max (128 MB)</option>
+        </select>
+      </div>
+      <div class="row">
+        <label for="select-depth">Analysis Depth</label>
+        <select id="select-depth">
+          <option value="6">Depth 6 (Instant)</option>
+          <option value="10">Depth 10 (Fast)</option>
+          <option value="14" selected>Depth 14 (Strong)</option>
+          <option value="18">Depth 18 (Master)</option>
+          <option value="20">Depth 20 (Max GM)</option>
+        </select>
+      </div>
+      <div class="row">
+        <label for="range-skill">Difficulty (Skill <span id="skill-val">20</span>)</label>
+        <input type="range" id="range-skill" min="0" max="20" value="20" />
+      </div>
+      <div class="row">
+        <label for="select-multipv">Lines (MultiPV)</label>
+        <select id="select-multipv">
+          <option value="1">Top 1</option>
+          <option value="2" selected>Top 2</option>
+          <option value="3">Top 3</option>
+        </select>
+      </div>
+      <div class="row">
+        <label for="select-turn">Side to Move</label>
+        <select id="select-turn">
+          <option value="auto">Auto-Detect</option>
+          <option value="w">White</option>
+          <option value="b">Black</option>
+        </select>
+      </div>
+      <div class="row">
+        <label for="toggle-evalbar">Show Eval Bar</label>
+        <input type="checkbox" id="toggle-evalbar" checked />
+      </div>
+      <div class="row">
+        <label for="toggle-arrows">Show SVG Move Arrows</label>
+        <input type="checkbox" id="toggle-arrows" checked />
+      </div>
+      <div class="row">
+        <label for="toggle-annotations">Show Annotations (!! / ?!)</label>
+        <input type="checkbox" id="toggle-annotations" checked />
+      </div>
+      <div class="row">
+        <label for="toggle-book">Show Opening Book</label>
+        <input type="checkbox" id="toggle-book" checked />
+      </div>
+      <div class="row">
+        <label for="toggle-theme">Adapt Board Colors</label>
+        <input type="checkbox" id="toggle-theme" checked />
+      </div>
+      <div class="row">
+        <label for="toggle-hud">Show Eval HUD</label>
+        <input type="checkbox" id="toggle-hud" checked />
+      </div>
+    </section>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>Chess Forge Practice Board</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: #0D1117;
+    color: #E6EDF3;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    gap: 12px;
+  }
+  .toolbar {
+    width: min(92vw, 420px);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+  .toolbar button {
+    background: #21262D;
+    color: #E6EDF3;
+    border: 1px solid #30363D;
+    border-radius: 10px;
+    padding: 9px 12px;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .board {
+    width: min(92vw, 420px);
+    aspect-ratio: 1 / 1;
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    grid-template-rows: repeat(8, 1fr);
+    border: 2px solid #30363D;
+    border-radius: 10px;
+    overflow: hidden;
+    user-select: none;
+  }
+  .sq {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: clamp(22px, 7.2vw, 38px);
+    cursor: pointer;
+    position: relative;
+  }
+  .sq.light { background: #EBECD0; }
+  .sq.dark { background: #779556; }
+  .sq.selected { outline: 3px inset #10B981; background: rgba(16,185,129,0.45); }
+  .hint { font-size: 12px; color: #8B949E; text-align: center; }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <button id="btn-reset" type="button">Reset Board</button>
+    <button id="btn-flip" type="button">Flip Board</button>
+    <span id="turn-label" style="font-size:12px;font-weight:700;color:#10B981;">White to move</span>
+  </div>
+  <div id="board" class="board" data-chess-forge-board="true" data-flipped="false" data-turn="w"></div>
+  <div class="hint">Tap any piece then tap destination square — Browser Extension overlay updates live.</div>
+
+  <script>
+    const UNICODE = {
+      P: "♙", N: "♘", B: "♗", R: "♖", Q: "♕", K: "♔",
+      p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚"
+    };
+    const START = [
+      ["r","n","b","q","k","b","n","r"],
+      ["p","p","p","p","p","p","p","p"],
+      [".",".",".",".",".",".",".","."],
+      [".",".",".",".",".",".",".","."],
+      [".",".",".",".",".",".",".","."],
+      [".",".",".",".",".",".",".","."],
+      ["P","P","P","P","P","P","P","P"],
+      ["R","N","B","Q","K","B","N","R"]
+    ];
+    let grid = START.map(r => r.slice());
+    let turn = "w";
+    let flipped = false;
+    let selected = null;
+    const boardEl = document.getElementById("board");
+    const turnEl = document.getElementById("turn-label");
+
+    function sqName(r, c) {
+      return "abcdefgh"[c] + String(8 - r);
+    }
+
+    function render() {
+      boardEl.setAttribute("data-flipped", String(flipped));
+      boardEl.setAttribute("data-turn", turn);
+      turnEl.textContent = turn === "w" ? "White to move" : "Black to move";
+      boardEl.innerHTML = "";
+      for (let vr = 0; vr < 8; vr++) {
+        for (let vc = 0; vc < 8; vc++) {
+          const r = flipped ? 7 - vr : vr;
+          const c = flipped ? 7 - vc : vc;
+          const piece = grid[r][c];
+          const div = document.createElement("div");
+          const isLight = (r + c) % 2 === 0;
+          div.className = "sq " + (isLight ? "light" : "dark") +
+            (selected && selected.r === r && selected.c === c ? " selected" : "");
+          div.setAttribute("data-square", sqName(r, c));
+          div.setAttribute("data-piece", piece === "." ? "" : piece);
+          if (piece !== ".") {
+            div.textContent = UNICODE[piece] || piece;
+            div.style.color = piece === piece.toUpperCase() ? "#FFFFFF" : "#111827";
+            div.style.textShadow = piece === piece.toUpperCase()
+              ? "0 1px 2px rgba(0,0,0,0.85)"
+              : "0 1px 1px rgba(255,255,255,0.25)";
+          }
+          div.addEventListener("click", () => handleSquareTap(r, c));
+          boardEl.appendChild(div);
+        }
+      }
+    }
+
+    function handleSquareTap(r, c) {
+      const piece = grid[r][c];
+      const isWhitePiece = piece !== "." && piece === piece.toUpperCase();
+      if (!selected) {
+        if (piece !== "." && ((turn === "w" && isWhitePiece) || (turn === "b" && !isWhitePiece))) {
+          selected = { r, c };
+          render();
+        }
+        return;
+      }
+      if (selected.r === r && selected.c === c) {
+        selected = null;
+        render();
+        return;
+      }
+      if (piece !== "." && ((turn === "w" && isWhitePiece) || (turn === "b" && !isWhitePiece))) {
+        selected = { r, c };
+        render();
+        return;
+      }
+      const moving = grid[selected.r][selected.c];
+      grid[r][c] = moving;
+      grid[selected.r][selected.c] = ".";
+      if (moving === "P" && r === 0) grid[r][c] = "Q";
+      if (moving === "p" && r === 7) grid[r][c] = "q";
+      selected = null;
+      turn = turn === "w" ? "b" : "w";
+      render();
+    }
+
+    document.getElementById("btn-reset").addEventListener("click", () => {
+      grid = START.map(r => r.slice());
+      turn = "w";
+      selected = null;
+      render();
+    });
+
+    document.getElementById("btn-flip").addEventListener("click", () => {
+      flipped = !flipped;
+      render();
+    });
+
+    window.__chessForgeMakePracticeMove = function (uci) {
+      if (!uci || uci.length < 4) return false;
+      const fromCol = "abcdefgh".indexOf(uci[0]);
+      const fromRow = 8 - parseInt(uci[1], 10);
+      const toCol = "abcdefgh".indexOf(uci[2]);
+      const toRow = 8 - parseInt(uci[3], 10);
+      if (fromCol < 0 || toCol < 0 || fromRow < 0 || fromRow > 7 || toRow < 0 || toRow > 7) return false;
+      const moving = grid[fromRow][fromCol];
+      if (!moving || moving === ".") return false;
+      grid[toRow][toCol] = moving;
+      grid[fromRow][fromCol] = ".";
+      if (moving === "P" && toRow === 0) grid[toRow][toCol] = uci[4] ? uci[4].toUpperCase() : "Q";
+      if (moving === "p" && toRow === 7) grid[toRow][toCol] = uci[4] ? uci[4].toLowerCase() : "q";
+      if (moving === "K" && fromRow === 7 && fromCol === 4 && toCol === 6) {
+        grid[7][5] = grid[7][7]; grid[7][7] = ".";
+      } else if (moving === "K" && fromRow === 7 && fromCol === 4 && toCol === 2) {
+        grid[7][3] = grid[7][0]; grid[7][0] = ".";
+      } else if (moving === "k" && fromRow === 0 && fromCol === 4 && toCol === 6) {
+        grid[0][5] = grid[0][7]; grid[0][7] = ".";
+      } else if (moving === "k" && fromRow === 0 && fromCol === 4 && toCol === 2) {
+        grid[0][3] = grid[0][0]; grid[0][0] = ".";
+      }
+      selected = null;
+      turn = turn === "w" ? "b" : "w";
+      render();
+      return true;
+    };
+
+    render();
+  </script>
+</body>
+</html>

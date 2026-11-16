@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">Chess Forge</string>
+    <string name="hero_subtitle">Stockfish 19 WASM Browser Extension for Lichess.org &amp; Chess.com</string>
+    <string name="tab_extension">Extension</string>
+    <string name="tab_browser">Browser</string>
+    <string name="tab_settings">Settings</string>
+    <string name="btn_save_zip">Download .ZIP</string>
+    <string name="btn_share_zip">Share to Browser</string>
+    <string name="btn_open_browser">Test in Browser</string>
+    <string name="cd_hero_banner">Chess Forge browser extension illustration</string>
+</resources>

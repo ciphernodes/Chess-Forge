@@ -1,0 +1,126 @@
+name: Build Chess Forge (Mobile APK & PC Extension ZIP)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  pc-browser-extension:
+    name: PC Version - Browser Extension (.zip)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate Extension Manifest & Scripts
+        run: |
+          node -e "const fs=require('fs'); const m=JSON.parse(fs.readFileSync('browser-extension/manifest.json','utf8')); if (m.manifest_version !== 3) process.exit(1); console.log('Validated MV3:', m.name, m.version);"
+          node --check browser-extension/src/chess-engine.js
+          node --check browser-extension/src/opening-book.js
+          node --check browser-extension/src/content.js
+          node --check browser-extension/src/offscreen.js
+          node --check browser-extension/src/popup.js
+          node --check browser-extension/src/background.js
+
+      - name: Package Extension ZIP Check
+        run: |
+          (cd browser-extension && zip -r ../chess-forge-browser-extension.zip manifest.json README.md icons src vendor)
+          unzip -t chess-forge-browser-extension.zip
+
+      - name: Upload PC Browser Extension (.zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: chess-forge-pc-extension
+          path: browser-extension
+          if-no-files-found: error
+          retention-days: 30
+
+  mobile-android-apk:
+    name: Mobile Version - Android App (.apk)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Sync Bundled Extension ZIP into Android Assets
+        run: |
+          if [ -d "browser-extension" ]; then
+            (cd browser-extension && zip -r ../chess-forge-browser-extension.zip manifest.json README.md icons src vendor)
+            cp chess-forge-browser-extension.zip app/src/main/assets/chess-forge-browser-extension.zip
+          fi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Configure Android SDK Licenses & Platforms
+        run: |
+          SDK_DIR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          sudo chmod -R a+rwx "$SDK_DIR" || true
+          mkdir -p "$SDK_DIR/licenses"
+          printf "\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e\n" > "$SDK_DIR/licenses/android-sdk-license"
+          printf "\n84831b9409646a918e30573bab4c9c91346d8abd\n" > "$SDK_DIR/licenses/android-sdk-preview-license"
+          if [ -x "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" ]; then
+            yes | "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+            if [ ! -d "$SDK_DIR/platforms/android-36.1" ]; then
+              yes | "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36.1" "build-tools;36.0.0" || true
+            fi
+          fi
+
+      - name: Prepare environment configuration
+        run: |
+          if [ ! -f ".env" ]; then
+            cp .env.example .env 2>/dev/null || touch .env
+          fi
+
+      - name: Restore or generate debug keystore
+        run: |
+          if [ -f "debug.keystore.base64" ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          elif [ ! -f "debug.keystore" ]; then
+            keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      - name: Build Debug APK
+        run: |
+          if [ -f "./gradlew" ] && [ -f "gradle/wrapper/gradle-wrapper.jar" ]; then
+            chmod +x ./gradlew
+            ./gradlew assembleDebug --stacktrace --no-daemon --max-workers=2 -Dorg.gradle.jvmargs="-Xmx2048m -XX:MaxMetaspaceSize=768m"
+          else
+            gradle assembleDebug --stacktrace --no-daemon --max-workers=2 -Dorg.gradle.jvmargs="-Xmx2048m -XX:MaxMetaspaceSize=768m"
+          fi
+
+      - name: Upload Mobile Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: chess-forge-mobile-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Run Core JVM Unit Tests
+        run: |
+          if [ -f "./gradlew" ] && [ -f "gradle/wrapper/gradle-wrapper.jar" ]; then
+            ./gradlew :app:testDebugUnitTest --tests "com.example.chessoverlay.chess.*" --tests "com.example.chessoverlay.engine.*" --stacktrace --no-daemon --max-workers=2 -Dorg.gradle.jvmargs="-Xmx2048m -XX:MaxMetaspaceSize=768m"
+          else
+            gradle :app:testDebugUnitTest --tests "com.example.chessoverlay.chess.*" --tests "com.example.chessoverlay.engine.*" --stacktrace --no-daemon --max-workers=2 -Dorg.gradle.jvmargs="-Xmx2048m -XX:MaxMetaspaceSize=768m"
+          fi
+
+      - name: Run Robolectric UI Tests (Non-Blocking)
+        continue-on-error: true
+        run: |
+          if [ -f "./gradlew" ] && [ -f "gradle/wrapper/gradle-wrapper.jar" ]; then
+            ./gradlew :app:testDebugUnitTest --tests "com.example.chessoverlay.ChessForgeRobolectricTest" --stacktrace --no-daemon --max-workers=2 -Dorg.gradle.jvmargs="-Xmx2048m -XX:MaxMetaspaceSize=768m"
+          else
+            gradle :app:testDebugUnitTest --tests "com.example.chessoverlay.ChessForgeRobolectricTest" --stacktrace --no-daemon --max-workers=2 -Dorg.gradle.jvmargs="-Xmx2048m -XX:MaxMetaspaceSize=768m"
+          fi
