@@ -9,6 +9,10 @@
   const elThemeBadge = document.getElementById("theme-badge");
   const elBookHeader = document.getElementById("book-header");
   const elBookMoves = document.getElementById("book-moves");
+  const elTablebaseCard = document.getElementById("tablebase-card");
+  const elTbBadge = document.getElementById("tb-badge");
+  const elTbHeader = document.getElementById("tb-header");
+  const elTbMoves = document.getElementById("tb-moves");
 
   const elEnabled = document.getElementById("toggle-enabled");
   const elCpu = document.getElementById("select-cpu");
@@ -21,6 +25,7 @@
   const elArrows = document.getElementById("toggle-arrows");
   const elAnnotations = document.getElementById("toggle-annotations");
   const elBook = document.getElementById("toggle-book");
+  const elTablebase = document.getElementById("toggle-tablebase");
   const elTheme = document.getElementById("toggle-theme");
   const elHud = document.getElementById("toggle-hud");
   const elAnalyze = document.getElementById("btn-reanalyze");
@@ -38,6 +43,7 @@
     showArrows: true,
     showAnnotations: true,
     showOpeningBook: true,
+    showTablebase: true,
     autoAdaptTheme: true,
     showHud: true
   };
@@ -96,10 +102,51 @@
     }
   }
 
+  function renderTablebase(tb) {
+    if (!elTablebaseCard) return;
+    if (!tb || !tb.isTablebase) {
+      elTablebaseCard.style.display = "none";
+      return;
+    }
+    elTablebaseCard.style.display = "block";
+    const color = tb.category === "win" ? "#10b981" : (tb.category === "loss" ? "#ef4444" : "#f59e0b");
+    elTbBadge.textContent = tb.scoreBadge || tb.outcome;
+    elTbBadge.style.borderColor = color;
+    elTbBadge.style.color = color;
+    elTbHeader.textContent = `Syzygy 7-Piece • ${tb.outcome} (${tb.scoreBadge})`;
+    elTbHeader.style.color = color;
+    elTbMoves.innerHTML = "";
+    const moves = tb.moves || [];
+    if (moves.length === 0) {
+      elTbMoves.innerHTML = '<p class="muted">Theoretical conclusion reached.</p>';
+      return;
+    }
+    for (const m of moves.slice(0, 4)) {
+      const row = document.createElement("div");
+      row.className = "line-row";
+      const left = document.createElement("span");
+      left.textContent = `${m.san} (${m.uci})`;
+      if (m.annotation) {
+        const ann = document.createElement("span");
+        ann.className = "ann-badge";
+        ann.textContent = m.annotation;
+        left.appendChild(ann);
+      }
+      const right = document.createElement("span");
+      right.className = m.quality === "win" ? "score-primary" : "score-secondary";
+      const dtmText = m.checkmate ? "Mate" : (m.stalemate ? "Stalemate" : (m.dtm !== null ? `DTM ${m.dtm}` : (m.dtz !== null ? `DTZ ${m.dtz}` : m.quality)));
+      right.textContent = dtmText;
+      row.appendChild(left);
+      row.appendChild(right);
+      elTbMoves.appendChild(row);
+    }
+  }
+
   function renderResult(result) {
     if (!result || !result.lines || result.lines.length === 0) {
       elLines.innerHTML = '<p class="muted">No active Lichess/Chess.com board detected on current tab.</p>';
       elFen.textContent = "FEN: --";
+      if (elTablebaseCard) elTablebaseCard.style.display = "none";
       return;
     }
 
@@ -108,6 +155,7 @@
     }
 
     renderOpeningBook(result.openingBook);
+    renderTablebase(result.tablebase);
 
     const top = result.lines[0];
     const pct = top.whiteWinPct !== undefined ? top.whiteWinPct : top.winPct;
@@ -176,6 +224,7 @@
     elArrows.checked = data.showArrows !== false;
     elAnnotations.checked = data.showAnnotations !== false;
     elBook.checked = data.showOpeningBook !== false;
+    if (elTablebase) elTablebase.checked = data.showTablebase !== false;
     elTheme.checked = data.autoAdaptTheme !== false;
     elHud.checked = data.showHud !== false;
 
@@ -207,6 +256,7 @@
   elArrows.addEventListener("change", () => pushConfigToActiveTab({ showArrows: elArrows.checked }));
   elAnnotations.addEventListener("change", () => pushConfigToActiveTab({ showAnnotations: elAnnotations.checked }));
   elBook.addEventListener("change", () => pushConfigToActiveTab({ showOpeningBook: elBook.checked }));
+  if (elTablebase) elTablebase.addEventListener("change", () => pushConfigToActiveTab({ showTablebase: elTablebase.checked }));
   elTheme.addEventListener("change", () => pushConfigToActiveTab({ autoAdaptTheme: elTheme.checked }));
   elHud.addEventListener("change", () => pushConfigToActiveTab({ showHud: elHud.checked }));
 

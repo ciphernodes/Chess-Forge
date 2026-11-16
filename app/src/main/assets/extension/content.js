@@ -18,6 +18,7 @@
     showEvalBar: true,
     showAnnotations: true,
     showOpeningBook: true,
+    showTablebase: true,
     autoAdaptTheme: true,
     evalBarOrientation: "vertical",
     multiPv: 2,
@@ -37,6 +38,7 @@
   let prevAnalysisForAnnotation = null;
   let lastPlayedAnnotation = null; // { sq, symbol, label, color, cpLoss }
   let lastOpeningBook = null;
+  let lastTablebase = null;
   let lastBoardTheme = {
     name: "Classic Dark",
     isDark: true,
@@ -68,6 +70,7 @@
   let statusDotEl = null;
   let hudTextEl = null;
   let bookBannerEl = null;
+  let tablebaseBannerEl = null;
   let fabPill = null;
 
   function hasChromeStorage() {
@@ -494,6 +497,13 @@
       "font-size:clamp(10px, 2.4vw, 11px);font-weight:600;max-width:calc(100vw - 20px);" +
       "box-shadow:0 4px 12px rgba(0,0,0,0.35);pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
 
+    tablebaseBannerEl = document.createElement("div");
+    tablebaseBannerEl.style.cssText =
+      "position:fixed;display:none;align-items:center;gap:6px;padding:4px 10px;border-radius:10px;" +
+      "background:rgba(22,27,34,0.94);border:1.5px solid #F59E0B;color:#FEF3C7;" +
+      "font-size:clamp(10px, 2.4vw, 11px);font-weight:700;max-width:calc(100vw - 20px);" +
+      "box-shadow:0 4px 14px rgba(0,0,0,0.45);pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+
     fabPill = document.createElement("div");
     fabPill.style.cssText =
       "position:fixed;right:10px;bottom:12px;display:flex;align-items:center;gap:6px;padding:5px 8px;" +
@@ -536,6 +546,7 @@
     overlayHost.appendChild(evalBarEl);
     overlayHost.appendChild(hudPill);
     overlayHost.appendChild(bookBannerEl);
+    overlayHost.appendChild(tablebaseBannerEl);
     overlayHost.appendChild(fabPill);
     document.body.appendChild(overlayHost);
   }
@@ -544,6 +555,7 @@
     if (svgLayer) svgLayer.innerHTML = "";
     if (hudPill) hudPill.style.display = "none";
     if (bookBannerEl) bookBannerEl.style.display = "none";
+    if (tablebaseBannerEl) tablebaseBannerEl.style.display = "none";
     if (evalBarEl) evalBarEl.style.display = "none";
   }
 
@@ -847,6 +859,29 @@
       bookBannerEl.style.display = "none";
     }
 
+    if (config.showTablebase && lastTablebase && lastTablebase.isTablebase) {
+      const bestMove = lastTablebase.moves && lastTablebase.moves[0]
+        ? ` • Best: ${lastTablebase.moves[0].san} (${lastTablebase.moves[0].uci})`
+        : "";
+      tablebaseBannerEl.textContent = `Syzygy 7-Piece • ${lastTablebase.outcome} ${lastTablebase.scoreBadge}${bestMove}`;
+      tablebaseBannerEl.style.background = lastBoardTheme.hudBg;
+      tablebaseBannerEl.style.borderColor =
+        lastTablebase.category === "win" ? "#10B981" : (lastTablebase.category === "loss" ? "#EF4444" : "#F59E0B");
+      tablebaseBannerEl.style.color =
+        lastTablebase.category === "win" ? "#A7F3D0" : (lastTablebase.category === "loss" ? "#FCA5A5" : "#FEF3C7");
+      const bottomY = Math.min(
+        window.innerHeight - 54,
+        rect.bottom + (bookBannerEl && bookBannerEl.style.display !== "none" ? 36 : 8)
+      );
+      const centerX = Math.max(120, Math.min(window.innerWidth - 120, rect.left + rect.width / 2));
+      tablebaseBannerEl.style.left = `${centerX}px`;
+      tablebaseBannerEl.style.top = `${bottomY}px`;
+      tablebaseBannerEl.style.transform = "translateX(-50%)";
+      tablebaseBannerEl.style.display = "flex";
+    } else {
+      tablebaseBannerEl.style.display = "none";
+    }
+
     if (fabPill) {
       fabPill.style.borderColor = lastBoardTheme.hudBorder;
     }
@@ -988,7 +1023,8 @@
         accentHex: lastBoardTheme.hudBorder
       },
       lastMoveAnnotation: lastPlayedAnnotation,
-      openingBook: lastOpeningBook
+      openingBook: lastOpeningBook,
+      tablebase: lastTablebase
     });
 
     if (typeof window.ChessForgeAndroidBridge !== "undefined" &&
@@ -1085,6 +1121,19 @@
       lastOpeningBook = null;
     }
 
+    // Syzygy Endgame Tablebase lookup (7 or fewer pieces on board)
+    if (window.ChessForgeTablebase && config.showTablebase && window.ChessForgeTablebase.isApplicable(fen)) {
+      lastTablebase = window.ChessForgeTablebase.lookup(fen, (tbData) => {
+        if (seq !== activeSearchSeq || !tbData) return;
+        lastTablebase = tbData;
+        if (lastAnalysis && lastAnalysis.fen === fen) {
+          publishResult(boardInfo, turn, lastAnalysis.result, playedDestSq);
+        }
+      });
+    } else {
+      lastTablebase = null;
+    }
+
     setStatus("CALCULATING");
     if (lastAnalysis) renderOverlay(boardInfo, lastAnalysis.result, turn);
 
@@ -1151,7 +1200,7 @@
         sendResponse({
           config,
           engineStatus,
-          lastAnalysis: lastAnalysis ? Object.assign({}, lastAnalysis.result, { openingBook: lastOpeningBook, boardTheme: lastBoardTheme }) : null
+          lastAnalysis: lastAnalysis ? Object.assign({}, lastAnalysis.result, { openingBook: lastOpeningBook, tablebase: lastTablebase, boardTheme: lastBoardTheme }) : null
         });
       } else if (msg.type === "UPDATE_CONFIG") {
         config = Object.assign({}, config, msg.config || {});

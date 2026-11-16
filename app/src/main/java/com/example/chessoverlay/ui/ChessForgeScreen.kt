@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
@@ -44,6 +45,9 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -82,6 +86,7 @@ import com.example.chessoverlay.ui.theme.HairlineBorder
 import com.example.chessoverlay.ui.theme.ObsidianBg
 import com.example.chessoverlay.ui.theme.TacticalAmber
 import com.example.chessoverlay.ui.theme.TacticalEmerald
+import com.example.chessoverlay.ui.theme.TacticalRed
 
 @Composable
 fun ChessForgeScreen(
@@ -101,6 +106,7 @@ fun ChessForgeScreen(
     onToggleArrows: (Boolean) -> Unit,
     onToggleAnnotations: (Boolean) -> Unit,
     onToggleOpeningBook: (Boolean) -> Unit,
+    onToggleTablebase: (Boolean) -> Unit = {},
     onToggleAutoAdaptTheme: (Boolean) -> Unit,
     onToggleHud: (Boolean) -> Unit,
     onToggleEvalBar: (Boolean) -> Unit,
@@ -124,7 +130,56 @@ fun ChessForgeScreen(
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = ObsidianBg,
-        contentWindowInsets = WindowInsets.safeDrawing
+        contentWindowInsets = WindowInsets.safeDrawing,
+        bottomBar = {
+            NavigationBar(
+                containerColor = CarbonSurface,
+                contentColor = MaterialTheme.colorScheme.onSurface
+            ) {
+                NavigationBarItem(
+                    selected = selectedTab == WorkspaceTab.EXTENSION,
+                    onClick = { onSelectTab(WorkspaceTab.EXTENSION) },
+                    icon = { Icon(Icons.Default.Extension, contentDescription = "Extension Tab") },
+                    label = { Text("Extension") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Color(0xFF042F2E),
+                        selectedTextColor = TacticalEmerald,
+                        indicatorColor = TacticalEmerald,
+                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
+                    modifier = Modifier.testTag("nav_bottom_extension")
+                )
+                NavigationBarItem(
+                    selected = selectedTab == WorkspaceTab.BROWSER,
+                    onClick = { onSelectTab(WorkspaceTab.BROWSER) },
+                    icon = { Icon(Icons.Default.Language, contentDescription = "Browser Tab") },
+                    label = { Text("Browser") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Color(0xFF042F2E),
+                        selectedTextColor = TacticalEmerald,
+                        indicatorColor = TacticalEmerald,
+                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
+                    modifier = Modifier.testTag("nav_bottom_browser")
+                )
+                NavigationBarItem(
+                    selected = selectedTab == WorkspaceTab.SETTINGS,
+                    onClick = { onSelectTab(WorkspaceTab.SETTINGS) },
+                    icon = { Icon(Icons.Default.Settings, contentDescription = "Settings Tab") },
+                    label = { Text("Settings") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Color(0xFF042F2E),
+                        selectedTextColor = TacticalEmerald,
+                        indicatorColor = TacticalEmerald,
+                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
+                    modifier = Modifier.testTag("nav_bottom_settings")
+                )
+            }
+        }
     ) { innerPadding ->
         Column(
             modifier = Modifier
@@ -186,6 +241,7 @@ fun ChessForgeScreen(
                         onToggleArrows = onToggleArrows,
                         onToggleAnnotations = onToggleAnnotations,
                         onToggleOpeningBook = onToggleOpeningBook,
+                        onToggleTablebase = onToggleTablebase,
                         onToggleAutoAdaptTheme = onToggleAutoAdaptTheme,
                         onToggleHud = onToggleHud,
                         onSelectTurn = onSelectTurn,
@@ -276,6 +332,19 @@ private fun WorkspaceTabHeader(
                     expanded = menuExpanded,
                     onDismissRequest = { menuExpanded = false }
                 ) {
+                    DropdownMenuItem(
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(Icons.Default.Settings, contentDescription = null, tint = TacticalEmerald, modifier = Modifier.size(18.dp))
+                                Text("Full Settings (Engine, Syzygy, Theme)", fontWeight = FontWeight.SemiBold)
+                            }
+                        },
+                        onClick = {
+                            onSelectTab(WorkspaceTab.SETTINGS)
+                            menuExpanded = false
+                        }
+                    )
+                    HorizontalDivider()
                     listOf(6, 10, 14, 18, 20).forEach { d ->
                         DropdownMenuItem(
                             text = { Text("Depth $d") },
@@ -420,6 +489,74 @@ private fun ExtensionHubContent(
                         Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("Configure Stockfish 19 WASM & Overlays")
+                    }
+                }
+            }
+
+            // Syzygy 7-Piece Endgame Tablebase Overview Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = CarbonSurface),
+                border = BorderStroke(1.dp, HairlineBorder)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Psychology,
+                                contentDescription = null,
+                                tint = TacticalEmerald,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = "Syzygy 7-Piece Tablebase",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = TacticalEmerald.copy(alpha = 0.18f),
+                            border = BorderStroke(1.dp, TacticalEmerald)
+                        ) {
+                            Text(
+                                text = if (extensionConfig.showTablebase) "Active (<= 7 pcs)" else "Disabled",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = if (extensionConfig.showTablebase) TacticalEmerald else TacticalAmber,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    val tb = liveAnalysis.tablebase
+                    if (tb != null && tb.isTablebase) {
+                        Text(
+                            text = "Outcome: ${tb.outcome} (${tb.scoreBadge})",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = when (tb.category) {
+                                "win" -> TacticalEmerald
+                                "loss" -> TacticalRed
+                                else -> TacticalAmber
+                            }
+                        )
+                    } else {
+                        Text(
+                            text = "Automatic lookup activates when 7 or fewer pieces remain on the board with mathematically exact Win/Draw/Loss & DTM analysis.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }

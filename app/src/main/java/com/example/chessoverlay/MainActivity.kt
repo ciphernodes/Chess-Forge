@@ -71,6 +71,7 @@ class MainActivity : ComponentActivity() {
                     onToggleArrows = viewModel::setShowArrows,
                     onToggleAnnotations = viewModel::setShowAnnotations,
                     onToggleOpeningBook = viewModel::setShowOpeningBook,
+                    onToggleTablebase = viewModel::setShowTablebase,
                     onToggleAutoAdaptTheme = viewModel::setAutoAdaptTheme,
                     onToggleHud = viewModel::setShowHud,
                     onToggleEvalBar = viewModel::setShowEvalBar,

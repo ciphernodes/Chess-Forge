@@ -21,6 +21,7 @@ jobs:
           node -e "const fs=require('fs'); const m=JSON.parse(fs.readFileSync('browser-extension/manifest.json','utf8')); if (m.manifest_version !== 3) process.exit(1); console.log('Validated MV3:', m.name, m.version);"
           node --check browser-extension/src/chess-engine.js
           node --check browser-extension/src/opening-book.js
+          node --check browser-extension/src/syzygy-tablebase.js
           node --check browser-extension/src/content.js
           node --check browser-extension/src/offscreen.js
           node --check browser-extension/src/popup.js

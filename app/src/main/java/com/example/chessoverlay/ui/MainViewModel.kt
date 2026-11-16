@@ -14,6 +14,8 @@ import com.example.chessoverlay.model.EvalBarOrientation
 import com.example.chessoverlay.model.MoveAnnotationInfo
 import com.example.chessoverlay.model.OpeningBookMove
 import com.example.chessoverlay.model.OpeningBookState
+import com.example.chessoverlay.model.TablebaseMove
+import com.example.chessoverlay.model.TablebaseState
 import com.example.chessoverlay.model.WorkspaceTab
 import com.example.chessoverlay.util.AppLogger
 import com.example.chessoverlay.util.AssetManagerHelper
@@ -72,9 +74,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return try {
             val hasEngine = AssetManagerHelper.readAssetText(ctx, AssetManagerHelper.EXTENSION_ENGINE_JS).isNotEmpty()
             val hasBook = AssetManagerHelper.readAssetText(ctx, AssetManagerHelper.EXTENSION_OPENING_BOOK_JS).isNotEmpty()
+            val hasTablebase = AssetManagerHelper.readAssetText(ctx, AssetManagerHelper.EXTENSION_SYZYGY_TABLEBASE_JS).isNotEmpty()
             val hasContent = AssetManagerHelper.readAssetText(ctx, AssetManagerHelper.EXTENSION_CONTENT_JS).isNotEmpty()
             val hasZip = ctx.assets.open(AssetManagerHelper.EXTENSION_ZIP_ASSET).use { it.available() > 0 }
-            hasEngine && hasBook && hasContent && hasZip
+            hasEngine && hasBook && hasTablebase && hasContent && hasZip
         } catch (t: Throwable) {
             AppLogger.w(TAG, "Extension asset check failed: ${t.message}")
             false
@@ -125,6 +128,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setShowAnnotations(showAnnotations: Boolean) = updateConfig { it.copy(showAnnotations = showAnnotations) }
 
     fun setShowOpeningBook(showOpeningBook: Boolean) = updateConfig { it.copy(showOpeningBook = showOpeningBook) }
+
+    fun setShowTablebase(showTablebase: Boolean) = updateConfig { it.copy(showTablebase = showTablebase) }
 
     fun setAutoAdaptTheme(autoAdaptTheme: Boolean) = updateConfig { it.copy(autoAdaptTheme = autoAdaptTheme) }
 
@@ -238,6 +243,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             } else null
 
+            val tbObj = root.optJSONObject("tablebase")
+            val parsedTb = if (tbObj != null && tbObj.optBoolean("isTablebase", false)) {
+                val tbMovesArr = tbObj.optJSONArray("moves")
+                val tbMoves = buildList {
+                    if (tbMovesArr != null) {
+                        for (i in 0 until tbMovesArr.length()) {
+                            val m = tbMovesArr.optJSONObject(i) ?: continue
+                            val dtmVal = if (m.has("dtm") && !m.isNull("dtm")) m.optInt("dtm") else null
+                            val dtzVal = if (m.has("dtz") && !m.isNull("dtz")) m.optInt("dtz") else null
+                            add(
+                                TablebaseMove(
+                                    uci = m.optString("uci", ""),
+                                    san = m.optString("san", m.optString("uci", "")),
+                                    quality = m.optString("quality", "draw"),
+                                    annotation = m.optString("annotation", "="),
+                                    dtm = dtmVal,
+                                    dtz = dtzVal,
+                                    checkmate = m.optBoolean("checkmate", false),
+                                    stalemate = m.optBoolean("stalemate", false)
+                                )
+                            )
+                        }
+                    }
+                }
+                val rootDtm = if (tbObj.has("dtm") && !tbObj.isNull("dtm")) tbObj.optInt("dtm") else null
+                val rootDtz = if (tbObj.has("dtz") && !tbObj.isNull("dtz")) tbObj.optInt("dtz") else null
+                TablebaseState(
+                    isTablebase = true,
+                    pieceCount = tbObj.optInt("pieceCount", 7),
+                    turn = tbObj.optString("turn", "w"),
+                    category = tbObj.optString("category", "draw"),
+                    outcome = tbObj.optString("outcome", "Tablebase Draw"),
+                    scoreBadge = tbObj.optString("scoreBadge", "TB Draw"),
+                    dtz = rootDtz,
+                    dtm = rootDtm,
+                    checkmate = tbObj.optBoolean("checkmate", false),
+                    stalemate = tbObj.optBoolean("stalemate", false),
+                    source = tbObj.optString("source", "Syzygy 7-Piece"),
+                    moves = tbMoves
+                )
+            } else null
+
             val themeObj = root.optJSONObject("boardTheme")
             val parsedTheme = if (themeObj != null) {
                 BoardThemeInfo(
@@ -268,6 +315,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 status = parsedStatus,
                 lines = parsedLines,
                 openingBook = parsedBook,
+                tablebase = parsedTb,
                 boardTheme = parsedTheme,
                 lastMoveAnnotation = parsedAnn
             )

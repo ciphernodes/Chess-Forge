@@ -136,6 +136,9 @@ fun BrowserWorkspaceTab(
     val openingBookJs = remember(context) {
         AssetManagerHelper.readAssetText(context, AssetManagerHelper.EXTENSION_OPENING_BOOK_JS)
     }
+    val syzygyTablebaseJs = remember(context) {
+        AssetManagerHelper.readAssetText(context, AssetManagerHelper.EXTENSION_SYZYGY_TABLEBASE_JS)
+    }
     val contentJs = remember(context) {
         AssetManagerHelper.readAssetText(context, AssetManagerHelper.EXTENSION_CONTENT_JS)
     }
@@ -545,6 +548,10 @@ fun BrowserWorkspaceTab(
                                                         append(openingBookJs)
                                                         append("\n")
                                                     }
+                                                    if (syzygyTablebaseJs.isNotEmpty()) {
+                                                        append(syzygyTablebaseJs)
+                                                        append("\n")
+                                                    }
                                                     append(contentJs)
                                                     append("\nwindow.__chessForgeUpdateConfig && window.__chessForgeUpdateConfig(")
                                                     append(extensionConfig.toJsObjectLiteral())
@@ -797,6 +804,110 @@ private fun LiveWebEvalStrip(
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
+                                }
+                            }
+                        }
+                    }
+
+                    // Syzygy 7-Piece Endgame Tablebase Section
+                    val tablebase = analysis.tablebase
+                    if (tablebase != null && tablebase.isTablebase) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(CarbonSurfaceHigh)
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            val tbColor = when (tablebase.category) {
+                                "win" -> TacticalEmerald
+                                "loss" -> TacticalRed
+                                else -> TacticalAmber
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Psychology,
+                                        contentDescription = null,
+                                        tint = tbColor,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = "Syzygy 7-Piece • ${tablebase.outcome}",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = tbColor
+                                    )
+                                }
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = tbColor.copy(alpha = 0.18f),
+                                    border = BorderStroke(1.dp, tbColor)
+                                ) {
+                                    Text(
+                                        text = tablebase.scoreBadge,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = tbColor,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                            if (tablebase.moves.isNotEmpty()) {
+                                tablebase.moves.take(3).forEach { move ->
+                                    val moveColor = when (move.quality) {
+                                        "win" -> TacticalEmerald
+                                        "loss" -> TacticalRed
+                                        else -> TacticalAmber
+                                    }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Text(
+                                                text = "${move.san} (${move.uci})",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Surface(
+                                                shape = RoundedCornerShape(4.dp),
+                                                color = moveColor.copy(alpha = 0.2f)
+                                            ) {
+                                                Text(
+                                                    text = move.annotation,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = moveColor,
+                                                    modifier = Modifier.padding(horizontal = 4.dp)
+                                                )
+                                            }
+                                        }
+                                        val dtmText = when {
+                                            move.checkmate -> "Checkmate"
+                                            move.stalemate -> "Stalemate"
+                                            move.dtm != null -> "DTM ${move.dtm}"
+                                            move.dtz != null -> "DTZ ${move.dtz}"
+                                            else -> move.quality.replaceFirstChar { it.uppercase() }
+                                        }
+                                        Text(
+                                            text = dtmText,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
                             }
                         }

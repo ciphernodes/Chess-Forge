@@ -39,6 +39,7 @@ class PreferencesRepository(private val context: Context) {
             showEvalBar = prefs[KEY_EVAL_BAR] ?: true,
             showAnnotations = prefs[KEY_ANNOTATIONS] ?: true,
             showOpeningBook = prefs[KEY_OPENING_BOOK] ?: true,
+            showTablebase = prefs[KEY_TABLEBASE] ?: true,
             autoAdaptTheme = prefs[KEY_ADAPT_THEME] ?: true,
             evalBarOrientation = EvalBarOrientation.fromKey(prefs[KEY_EVAL_ORIENTATION]),
             multiPv = (prefs[KEY_MULTI_PV] ?: 2).coerceIn(1, 3),
@@ -59,6 +60,7 @@ class PreferencesRepository(private val context: Context) {
             prefs[KEY_EVAL_BAR] = config.showEvalBar
             prefs[KEY_ANNOTATIONS] = config.showAnnotations
             prefs[KEY_OPENING_BOOK] = config.showOpeningBook
+            prefs[KEY_TABLEBASE] = config.showTablebase
             prefs[KEY_ADAPT_THEME] = config.autoAdaptTheme
             prefs[KEY_EVAL_ORIENTATION] = config.evalBarOrientation.key
             prefs[KEY_MULTI_PV] = config.multiPv.coerceIn(1, 3)
@@ -79,6 +81,7 @@ class PreferencesRepository(private val context: Context) {
         private val KEY_EVAL_BAR = booleanPreferencesKey("ext_show_eval_bar")
         private val KEY_ANNOTATIONS = booleanPreferencesKey("ext_show_annotations")
         private val KEY_OPENING_BOOK = booleanPreferencesKey("ext_show_opening_book")
+        private val KEY_TABLEBASE = booleanPreferencesKey("ext_show_tablebase")
         private val KEY_ADAPT_THEME = booleanPreferencesKey("ext_auto_adapt_theme")
         private val KEY_EVAL_ORIENTATION = stringPreferencesKey("ext_eval_orientation")
         private val KEY_MULTI_PV = intPreferencesKey("ext_multi_pv")

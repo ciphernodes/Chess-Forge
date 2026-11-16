@@ -72,6 +72,7 @@ fun SettingsScreen(
     onToggleArrows: (Boolean) -> Unit,
     onToggleAnnotations: (Boolean) -> Unit,
     onToggleOpeningBook: (Boolean) -> Unit,
+    onToggleTablebase: (Boolean) -> Unit = {},
     onToggleAutoAdaptTheme: (Boolean) -> Unit,
     onToggleHud: (Boolean) -> Unit,
     onSelectTurn: (String) -> Unit,
@@ -335,6 +336,32 @@ fun SettingsScreen(
                     testTag = "settings_switch_adapt_theme",
                     onCheckedChange = onToggleAutoAdaptTheme
                 )
+            }
+
+            // Syzygy 7-Piece Endgame Tablebase Card
+            SettingsSectionCard(
+                title = "Syzygy 7-Piece Endgame Tablebase",
+                icon = Icons.Default.Psychology
+            ) {
+                SettingsToggleItem(
+                    title = "Enable Syzygy Tablebase",
+                    subtitle = "Provides mathematically proven moves (WDL / DTZ / DTM) when 7 or fewer pieces remain",
+                    checked = config.showTablebase,
+                    testTag = "settings_switch_tablebase",
+                    onCheckedChange = onToggleTablebase
+                )
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = CarbonSurfaceHigh,
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                ) {
+                    Text(
+                        text = "Instant 7-piece tablebase lookup via Lichess API with automatic offline heuristic fallback for fundamental mates (K+Q vs K, K+R vs K, K+B vs K, etc.).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(10.dp)
+                    )
+                }
             }
 
             // Visual Display & Evaluation Bar Card

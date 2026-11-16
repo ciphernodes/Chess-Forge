@@ -9,6 +9,7 @@ object AssetManagerHelper {
     const val EXTENSION_ZIP_ASSET = "chess-forge-browser-extension.zip"
     const val EXTENSION_ENGINE_JS = "extension/chess-engine.js"
     const val EXTENSION_OPENING_BOOK_JS = "extension/opening-book.js"
+    const val EXTENSION_SYZYGY_TABLEBASE_JS = "extension/syzygy-tablebase.js"
     const val EXTENSION_CONTENT_JS = "extension/content.js"
     const val PRACTICE_BOARD_URL = "file:///android_asset/practice_board.html"
 

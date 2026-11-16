@@ -54,6 +54,7 @@ data class BrowserExtensionConfig(
     val showEvalBar: Boolean = true,
     val showAnnotations: Boolean = true,
     val showOpeningBook: Boolean = true,
+    val showTablebase: Boolean = true,
     val autoAdaptTheme: Boolean = true,
     val evalBarOrientation: EvalBarOrientation = EvalBarOrientation.VERTICAL,
     val multiPv: Int = 2,
@@ -76,6 +77,7 @@ data class BrowserExtensionConfig(
             "showEvalBar:$showEvalBar," +
             "showAnnotations:$showAnnotations," +
             "showOpeningBook:$showOpeningBook," +
+            "showTablebase:$showTablebase," +
             "autoAdaptTheme:$autoAdaptTheme," +
             "evalBarOrientation:'${evalBarOrientation.key}'," +
             "multiPv:${multiPv.coerceIn(1, 3)}," +
@@ -141,6 +143,32 @@ data class AnalysisLine(
     val pv: String = uci
 )
 
+data class TablebaseMove(
+    val uci: String,
+    val san: String,
+    val quality: String = "draw",
+    val annotation: String = "=",
+    val dtm: Int? = null,
+    val dtz: Int? = null,
+    val checkmate: Boolean = false,
+    val stalemate: Boolean = false
+)
+
+data class TablebaseState(
+    val isTablebase: Boolean = false,
+    val pieceCount: Int = 32,
+    val turn: String = "w",
+    val category: String = "draw",
+    val outcome: String = "Tablebase Draw",
+    val scoreBadge: String = "TB Draw",
+    val dtz: Int? = null,
+    val dtm: Int? = null,
+    val checkmate: Boolean = false,
+    val stalemate: Boolean = false,
+    val source: String = "Syzygy 7-Piece",
+    val moves: List<TablebaseMove> = emptyList()
+)
+
 data class BrowserAnalysisSnapshot(
     val fen: String = "",
     val depth: Int = 0,
@@ -150,6 +178,7 @@ data class BrowserAnalysisSnapshot(
     val status: EngineStatus = EngineStatus.IDLE,
     val lines: List<AnalysisLine> = emptyList(),
     val openingBook: OpeningBookState? = null,
+    val tablebase: TablebaseState? = null,
     val boardTheme: BoardThemeInfo = BoardThemeInfo(),
     val lastMoveAnnotation: MoveAnnotationInfo? = null
 )

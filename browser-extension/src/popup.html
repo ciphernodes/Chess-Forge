@@ -40,6 +40,17 @@
       </div>
     </section>
 
+    <section class="card" id="tablebase-card">
+      <div class="card-title">
+        <span>Syzygy 7-Piece Tablebase</span>
+        <span id="tb-badge" class="pill-tag">&le; 7 pieces</span>
+      </div>
+      <div id="tb-header" class="book-title">Endgame Tablebase (&le; 7 pieces)</div>
+      <div id="tb-moves" class="lines">
+        <p class="muted">Perfect endgame moves (WDL / DTZ / DTM) appear when &le; 7 pieces remain.</p>
+      </div>
+    </section>
+
     <section class="card">
       <div class="card-title">
         <span id="backend-label">Stockfish 19 Analysis</span>
@@ -105,6 +116,10 @@
       <div class="row">
         <label for="toggle-book">Show Opening Book</label>
         <input type="checkbox" id="toggle-book" checked />
+      </div>
+      <div class="row">
+        <label for="toggle-tablebase">Show Syzygy Tablebase</label>
+        <input type="checkbox" id="toggle-tablebase" checked />
       </div>
       <div class="row">
         <label for="toggle-theme">Adapt Board Colors</label>
