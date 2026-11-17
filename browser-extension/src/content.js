@@ -36,7 +36,8 @@
   let inferredTurn = "w";
   let lastAnalysis = null;
   let prevAnalysisForAnnotation = null;
-  let lastPlayedAnnotation = null; // { sq, symbol, label, color, cpLoss }
+  let prevOpeningBookForAnnotation = null;
+  let lastPlayedAnnotation = null; // { sq, uci, symbol, label, color, text, cpLoss, winPctLoss }
   let lastOpeningBook = null;
   let lastTablebase = null;
   let lastBoardTheme = {
@@ -393,26 +394,42 @@
     return board;
   }
 
-  function diffPlayedDestination(oldGrid, newGrid, movedColor) {
+  function diffPlayedMove(oldGrid, newGrid, movedColor) {
     if (!oldGrid || !newGrid) return null;
     const isMoverPiece = (ch) => {
       if (!ch || ch === ".") return false;
       return movedColor === "w" ? (ch >= "A" && ch <= "Z") : (ch >= "a" && ch <= "z");
     };
-    const candidates = [];
+    const destCandidates = [];
+    const srcCandidates = [];
     for (let r = 0; r < 8; r++) {
       for (let f = 0; f < 8; f++) {
-        if (oldGrid[r][f] !== newGrid[r][f] && isMoverPiece(newGrid[r][f])) {
-          candidates.push("abcdefgh"[f] + String(8 - r));
+        const oldCh = oldGrid[r][f];
+        const newCh = newGrid[r][f];
+        if (oldCh !== newCh) {
+          const sq = "abcdefgh"[f] + String(8 - r);
+          if (isMoverPiece(newCh)) destCandidates.push(sq);
+          if (isMoverPiece(oldCh) && !isMoverPiece(newCh)) srcCandidates.push(sq);
         }
       }
     }
-    // Skip castling rook square if king square also appears
-    if (candidates.length === 2) {
-      const kSq = candidates.find((sq) => sq[0] === "g" || sq[0] === "c");
-      if (kSq) return kSq;
+    let toSq = destCandidates[0] || null;
+    if (destCandidates.length === 2) {
+      const kSq = destCandidates.find((sq) => sq[0] === "g" || sq[0] === "c");
+      if (kSq) toSq = kSq;
     }
-    return candidates[0] || null;
+    let fromSq = srcCandidates[0] || null;
+    if (srcCandidates.length === 2) {
+      const kFrom = srcCandidates.find((sq) => sq[0] === "e");
+      if (kFrom) fromSq = kFrom;
+    }
+    const uci = fromSq && toSq ? `${fromSq}${toSq}` : null;
+    return toSq ? { fromSq, toSq, uci } : null;
+  }
+
+  function diffPlayedDestination(oldGrid, newGrid, movedColor) {
+    const mv = diffPlayedMove(oldGrid, newGrid, movedColor);
+    return mv ? mv.toSq : null;
   }
 
   function gridToPlacement(grid) {
@@ -597,72 +614,166 @@
     return whiteCp || 0;
   }
 
+  function cpToWinPct(cp) {
+    return 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * cp)) - 1);
+  }
+
+  function fenMaterialBalance(fen, color) {
+    if (!fen) return 0;
+    const placement = fen.trim().split(/\s+/)[0] || "";
+    const values = { p: 1, n: 3, b: 3, r: 5, q: 9 };
+    let wMat = 0;
+    let bMat = 0;
+    for (let i = 0; i < placement.length; i++) {
+      const ch = placement[i];
+      const lower = ch.toLowerCase();
+      const v = values[lower] || 0;
+      if (!v) continue;
+      if (ch >= "A" && ch <= "Z") wMat += v;
+      else bMat += v;
+    }
+    return color === "w" ? (wMat - bMat) : (bMat - wMat);
+  }
+
+  // Chess.com Game Review Move Classifications & Palette
   function annotationStyle(symbol) {
     switch (symbol) {
-      case "!!": return { label: "Brilliant", color: "#06B6D4", text: "#042F2E" };
-      case "!": return { label: "Best", color: "#10B981", text: "#042F2E" };
-      case "!?": return { label: "Interesting", color: "#38BDF8", text: "#082F49" };
-      case "?!": return { label: "Inaccuracy", color: "#F59E0B", text: "#451A03" };
-      case "?": return { label: "Mistake", color: "#F97316", text: "#FFFFFF" };
-      case "??": return { label: "Blunder", color: "#EF4444", text: "#FFFFFF" };
+      case "!!": return { label: "Brilliant", color: "#1BACA6", text: "#FFFFFF", glyph: "!!" };
+      case "!": return { label: "Great", color: "#5C8BB0", text: "#FFFFFF", glyph: "!" };
+      case "★": return { label: "Best", color: "#81B64C", text: "#FFFFFF", glyph: "star" };
+      case "+": return { label: "Excellent", color: "#96BC4B", text: "#042F2E", glyph: "+" };
+      case "✓": return { label: "Good", color: "#95B776", text: "#042F2E", glyph: "check" };
+      case "Book": return { label: "Book", color: "#A88865", text: "#FFFFFF", glyph: "book" };
+      case "?!": return { label: "Inaccuracy", color: "#F7C631", text: "#451A03", glyph: "?!" };
+      case "?": return { label: "Mistake", color: "#E6912C", text: "#FFFFFF", glyph: "?" };
+      case "✕": return { label: "Miss", color: "#FF7769", text: "#FFFFFF", glyph: "miss" };
+      case "??": return { label: "Blunder", color: "#CA3431", text: "#FFFFFF", glyph: "??" };
+      // Legacy fallback mappings
+      case "!?": return { label: "Excellent", color: "#96BC4B", text: "#042F2E", glyph: "+" };
       default: return null;
     }
   }
 
-  function classifyCandidateAnnotations(lines) {
+  function classifyCandidateAnnotations(lines, openingBook) {
     if (!lines || lines.length === 0) return lines;
     const topCp = scoreToComparableCp(lines[0]);
+    const topWinPct = lines[0].winPct !== undefined ? lines[0].winPct : cpToWinPct(topCp);
     const secondCp = lines.length > 1 ? scoreToComparableCp(lines[1]) : null;
+    const secondWinPct = lines.length > 1
+      ? (lines[1].winPct !== undefined ? lines[1].winPct : cpToWinPct(secondCp))
+      : null;
+
+    const bookUcis = new Set(
+      (openingBook && Array.isArray(openingBook.moves))
+        ? openingBook.moves.map((m) => (m.uci || "").slice(0, 4))
+        : []
+    );
 
     return lines.map((line, idx) => {
       let annotation = "";
+      const uci4 = (line.uci || "").slice(0, 4);
+      const isBookMove = bookUcis.has(uci4);
+
       if (idx === 0) {
-        const gap = secondCp !== null ? topCp - secondCp : 0;
-        if ((line.mate !== null && line.mate > 0) || gap >= 165) {
+        const cpGap = secondCp !== null ? topCp - secondCp : 0;
+        const winGap = secondWinPct !== null ? topWinPct - secondWinPct : 0;
+        if ((line.mate !== null && line.mate > 0 && Math.abs(line.mate) <= 5) || winGap >= 18) {
           annotation = "!!";
-        } else if (gap >= 45 || lines.length === 1) {
+        } else if (winGap >= 10 || cpGap >= 140) {
           annotation = "!";
+        } else if (isBookMove) {
+          annotation = "Book";
         } else {
-          annotation = "!";
+          annotation = "★";
         }
       } else {
-        const drop = topCp - scoreToComparableCp(line);
-        if (drop <= 35) annotation = "!?";
-        else if (drop < 120) annotation = "?!";
-        else if (drop < 280) annotation = "?";
+        const dropCp = topCp - scoreToComparableCp(line);
+        const lineWinPct = line.winPct !== undefined ? line.winPct : cpToWinPct(scoreToComparableCp(line));
+        const dropWin = Math.max(0, topWinPct - lineWinPct);
+        if (isBookMove && dropWin <= 3.5) annotation = "Book";
+        else if (dropWin <= 2.0 || dropCp <= 20) annotation = "+";
+        else if (dropWin <= 5.0 || dropCp <= 45) annotation = "✓";
+        else if (dropWin <= 10.0 || dropCp <= 105) annotation = "?!";
+        else if (dropWin <= 20.0 || dropCp <= 240) annotation = "?";
         else annotation = "??";
       }
       return Object.assign({}, line, { annotation });
     });
   }
 
-  function evaluatePlayedMoveAnnotation(prev, currTurn, currLines, playedDestSq) {
-    if (!prev || !currLines || currLines.length === 0) return null;
+  function evaluatePlayedMoveAnnotation(prev, prevBook, currFen, currTurn, currLines, playedMove) {
+    if (!prev || !currLines || currLines.length === 0 || !playedMove || !playedMove.toSq) return null;
     const top = currLines[0];
     const currWhiteCp = whiteComparableCp(top.whiteMate, top.whiteCp);
     const prevTop = prev.result && prev.result.lines && prev.result.lines[0];
     if (!prevTop) return null;
 
+    const prevSecond = prev.result && prev.result.lines && prev.result.lines[1];
     const prevWhiteCp = whiteComparableCp(prevTop.whiteMate, prevTop.whiteCp);
-    // Perspective of whoever just moved (prev.turn)
-    const cpLoss = prev.turn === "w" ? (prevWhiteCp - currWhiteCp) : (currWhiteCp - prevWhiteCp);
+    const prevMoverCp = prev.turn === "w" ? prevWhiteCp : -prevWhiteCp;
+    const currMoverCp = prev.turn === "w" ? currWhiteCp : -currWhiteCp;
+
+    const prevMoverWinPct = cpToWinPct(prevMoverCp);
+    const currMoverWinPct = cpToWinPct(currMoverCp);
+    const cpLoss = Math.max(0, prevMoverCp - currMoverCp);
+    const winPctLoss = Math.max(0, prevMoverWinPct - currMoverWinPct);
+
+    const playedUci4 = (playedMove.uci || "").slice(0, 4);
+    const prevTopUci4 = (prevTop.uci || "").slice(0, 4);
+    const matchedEngineTop = playedUci4 && prevTopUci4 && playedUci4 === prevTopUci4;
+
+    const inBook = Boolean(
+      prevBook &&
+      Array.isArray(prevBook.moves) &&
+      prevBook.moves.some((m) => (m.uci || "").slice(0, 4) === playedUci4)
+    );
+
+    // Detect material sacrifice for Chess.com-style Brilliant (!!)
+    const prevMat = fenMaterialBalance(prev.fen, prev.turn);
+    const currMat = fenMaterialBalance(currFen, prev.turn);
+    const sacrificedMaterial = (prevMat - currMat) >= 2; // Offered at least a minor/exchange/2 pawns
+
+    // Gap to #2 move for Great (!)
+    const secondWhiteCp = prevSecond ? whiteComparableCp(prevSecond.whiteMate, prevSecond.whiteCp) : null;
+    const secondMoverCp = secondWhiteCp !== null ? (prev.turn === "w" ? secondWhiteCp : -secondWhiteCp) : null;
+    const winGapOverSecond = secondMoverCp !== null ? (prevMoverWinPct - cpToWinPct(secondMoverCp)) : 0;
 
     let symbol = null;
-    if (cpLoss >= 280) symbol = "??";
-    else if (cpLoss >= 140) symbol = "?";
-    else if (cpLoss >= 60) symbol = "?!";
-    else if (cpLoss <= -40 && (top.whiteMate !== null || Math.abs(currWhiteCp) > 150)) symbol = "!!";
-    else if (cpLoss <= 15) symbol = "!";
+    if (inBook && winPctLoss <= 4.0) {
+      symbol = "Book";
+    } else if ((matchedEngineTop || winPctLoss <= 1.2) && sacrificedMaterial && currMoverWinPct >= 58 && prevMoverCp < 900) {
+      symbol = "!!";
+    } else if ((matchedEngineTop || winPctLoss <= 1.0) && (winGapOverSecond >= 11 || (currMoverWinPct >= 62 && prevMoverWinPct <= 52))) {
+      symbol = "!";
+    } else if (matchedEngineTop || winPctLoss <= 0.6) {
+      symbol = "★";
+    } else if (prevMoverWinPct >= 74 && winPctLoss >= 12 && currMoverWinPct >= 42 && currMoverWinPct < 62) {
+      // Missed a clear winning opportunity without blundering into a lost position
+      symbol = "✕";
+    } else if (winPctLoss <= 2.2 && cpLoss <= 25) {
+      symbol = "+";
+    } else if (winPctLoss <= 5.2 && cpLoss <= 55) {
+      symbol = "✓";
+    } else if (winPctLoss <= 10.5 && cpLoss <= 115) {
+      symbol = "?!";
+    } else if (winPctLoss <= 20.5 && cpLoss <= 245) {
+      symbol = "?";
+    } else {
+      symbol = "??";
+    }
 
-    if (!symbol || !playedDestSq) return null;
     const style = annotationStyle(symbol);
+    if (!style) return null;
     return {
-      sq: playedDestSq,
+      sq: playedMove.toSq,
+      uci: playedMove.uci || "",
       symbol,
       label: style.label,
       color: style.color,
       text: style.text,
-      cpLoss: Math.round(cpLoss)
+      glyph: style.glyph,
+      cpLoss: Math.round(cpLoss),
+      winPctLoss: Math.round(winPctLoss * 10) / 10
     };
   }
 
@@ -739,30 +850,109 @@
     evalLabelEl.style.color = pct >= 55 ? "#0D1117" : "#F0F6FC";
   }
 
-  function drawAnnotationBadgeSvg(pt, symbol, style) {
-    const r = Math.max(8, Math.min(13, pt.cellW * 0.21));
-    const bx = pt.sqLeft + pt.cellW - r * 0.92;
-    const by = pt.sqTop + r * 0.92;
+  function drawAnnotationBadgeSvg(pt, symbol, style, highlightSquare) {
+    const r = Math.max(9, Math.min(14, pt.cellW * 0.22));
+    const bx = pt.sqLeft + pt.cellW - r * 0.85;
+    const by = pt.sqTop + r * 0.85;
+
+    if (highlightSquare) {
+      const sqRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      sqRect.setAttribute("x", pt.sqLeft.toFixed(1));
+      sqRect.setAttribute("y", pt.sqTop.toFixed(1));
+      sqRect.setAttribute("width", pt.cellW.toFixed(1));
+      sqRect.setAttribute("height", pt.cellW.toFixed(1));
+      sqRect.setAttribute("fill", style.color);
+      sqRect.setAttribute("fill-opacity", "0.22");
+      svgLayer.appendChild(sqRect);
+    }
 
     const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+
+    // Soft drop shadow just like Chess.com Game Review badges
+    const shadow = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    shadow.setAttribute("cx", bx.toFixed(1));
+    shadow.setAttribute("cy", (by + 1.4).toFixed(1));
+    shadow.setAttribute("r", r.toFixed(1));
+    shadow.setAttribute("fill", "rgba(0,0,0,0.42)");
+    g.appendChild(shadow);
+
     const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
     circle.setAttribute("cx", bx.toFixed(1));
     circle.setAttribute("cy", by.toFixed(1));
     circle.setAttribute("r", r.toFixed(1));
     circle.setAttribute("fill", style.color);
-    circle.setAttribute("stroke", lastBoardTheme.arrowOutline);
-    circle.setAttribute("stroke-width", "1.6");
+    circle.setAttribute("stroke", "#FFFFFF");
+    circle.setAttribute("stroke-opacity", "0.85");
+    circle.setAttribute("stroke-width", "1.4");
     g.appendChild(circle);
 
-    const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
-    text.setAttribute("x", bx.toFixed(1));
-    text.setAttribute("y", (by + r * 0.36).toFixed(1));
-    text.setAttribute("text-anchor", "middle");
-    text.setAttribute("fill", style.text);
-    text.setAttribute("font-size", Math.max(9, Math.round(r * 1.05)));
-    text.setAttribute("font-weight", "900");
-    text.textContent = symbol;
-    g.appendChild(text);
+    const glyph = style.glyph || symbol;
+    if (glyph === "star") {
+      // Crisp 5-point Chess.com Best Move Star
+      const pts = [];
+      for (let i = 0; i < 10; i++) {
+        const ang = -Math.PI / 2 + (i * Math.PI) / 5;
+        const rad = i % 2 === 0 ? r * 0.62 : r * 0.27;
+        pts.push(`${(bx + Math.cos(ang) * rad).toFixed(1)},${(by + Math.sin(ang) * rad).toFixed(1)}`);
+      }
+      const star = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+      star.setAttribute("points", pts.join(" "));
+      star.setAttribute("fill", style.text);
+      g.appendChild(star);
+    } else if (glyph === "book") {
+      // Open book silhouette for Book moves
+      const s = r * 0.52;
+      const bookPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      bookPath.setAttribute(
+        "d",
+        `M${(bx - s).toFixed(1)},${(by - s * 0.7).toFixed(1)} ` +
+        `Q${(bx - s * 0.4).toFixed(1)},${(by - s * 0.9).toFixed(1)} ${bx.toFixed(1)},${(by - s * 0.5).toFixed(1)} ` +
+        `Q${(bx + s * 0.4).toFixed(1)},${(by - s * 0.9).toFixed(1)} ${(bx + s).toFixed(1)},${(by - s * 0.7).toFixed(1)} ` +
+        `L${(bx + s).toFixed(1)},${(by + s * 0.7).toFixed(1)} ` +
+        `Q${(bx + s * 0.4).toFixed(1)},${(by + s * 0.5).toFixed(1)} ${bx.toFixed(1)},${(by + s * 0.85).toFixed(1)} ` +
+        `Q${(bx - s * 0.4).toFixed(1)},${(by + s * 0.5).toFixed(1)} ${(bx - s).toFixed(1)},${(by + s * 0.7).toFixed(1)} Z`
+      );
+      bookPath.setAttribute("fill", style.text);
+      g.appendChild(bookPath);
+    } else if (glyph === "miss") {
+      const d = r * 0.44;
+      const cross = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      cross.setAttribute(
+        "d",
+        `M${(bx - d).toFixed(1)},${(by - d).toFixed(1)} L${(bx + d).toFixed(1)},${(by + d).toFixed(1)} ` +
+        `M${(bx + d).toFixed(1)},${(by - d).toFixed(1)} L${(bx - d).toFixed(1)},${(by + d).toFixed(1)}`
+      );
+      cross.setAttribute("stroke", style.text);
+      cross.setAttribute("stroke-width", Math.max(2, r * 0.24).toFixed(1));
+      cross.setAttribute("stroke-linecap", "round");
+      g.appendChild(cross);
+    } else if (glyph === "check") {
+      const d = r * 0.48;
+      const chk = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      chk.setAttribute(
+        "d",
+        `M${(bx - d * 0.85).toFixed(1)},${(by + d * 0.05).toFixed(1)} ` +
+        `L${(bx - d * 0.15).toFixed(1)},${(by + d * 0.72).toFixed(1)} ` +
+        `L${(bx + d * 0.9).toFixed(1)},${(by - d * 0.62).toFixed(1)}`
+      );
+      chk.setAttribute("fill", "none");
+      chk.setAttribute("stroke", style.text);
+      chk.setAttribute("stroke-width", Math.max(2, r * 0.24).toFixed(1));
+      chk.setAttribute("stroke-linecap", "round");
+      chk.setAttribute("stroke-linejoin", "round");
+      g.appendChild(chk);
+    } else {
+      const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      text.setAttribute("x", bx.toFixed(1));
+      text.setAttribute("y", (by + r * 0.36).toFixed(1));
+      text.setAttribute("text-anchor", "middle");
+      text.setAttribute("fill", style.text);
+      text.setAttribute("font-family", "system-ui, -apple-system, sans-serif");
+      text.setAttribute("font-size", Math.max(9, Math.round(symbol.length > 1 ? r * 0.96 : r * 1.18)));
+      text.setAttribute("font-weight", "900");
+      text.textContent = symbol;
+      g.appendChild(text);
+    }
 
     svgLayer.appendChild(g);
   }
@@ -802,18 +992,18 @@
 
     const top = analysis.lines[0];
 
-    // Standard Chess Annotation Symbols on board squares (best engine move & last played move)
+    // Chess.com-style Move Annotations on board squares (last played move + top engine recommendation)
     if (config.showAnnotations) {
-      const topDest = uciSquareToScreenCenter(top.uci.slice(2, 4), rect, isFlipped);
-      if (topDest && top.annotation) {
-        const st = annotationStyle(top.annotation);
-        if (st) drawAnnotationBadgeSvg(topDest, top.annotation, st);
-      }
-      if (lastPlayedAnnotation && lastPlayedAnnotation.sq && lastPlayedAnnotation.sq !== top.uci.slice(2, 4)) {
+      if (lastPlayedAnnotation && lastPlayedAnnotation.sq) {
         const playedDest = uciSquareToScreenCenter(lastPlayedAnnotation.sq, rect, isFlipped);
         if (playedDest) {
-          drawAnnotationBadgeSvg(playedDest, lastPlayedAnnotation.symbol, lastPlayedAnnotation);
+          drawAnnotationBadgeSvg(playedDest, lastPlayedAnnotation.symbol, lastPlayedAnnotation, true);
         }
+      }
+      const topDest = uciSquareToScreenCenter(top.uci.slice(2, 4), rect, isFlipped);
+      if (topDest && top.annotation && (!lastPlayedAnnotation || lastPlayedAnnotation.sq !== top.uci.slice(2, 4))) {
+        const st = annotationStyle(top.annotation);
+        if (st) drawAnnotationBadgeSvg(topDest, top.annotation, st, false);
       }
     }
 
@@ -976,7 +1166,7 @@
       const { whiteMate, whiteCp, whiteWinPct } = toWhitePerspective(line, turn);
       return Object.assign({}, line, { san, whiteMate, whiteCp, whiteWinPct });
     });
-    result.lines = classifyCandidateAnnotations(mapped);
+    result.lines = classifyCandidateAnnotations(mapped, lastOpeningBook);
     return result;
   }
 
@@ -998,14 +1188,16 @@
     return enrichResult(fen, turn, raw);
   }
 
-  function publishResult(boardInfo, turn, result, playedDestSq) {
+  function publishResult(boardInfo, turn, result, playedMove) {
     if (lastAnalysis && lastAnalysis.fen !== result.fen) {
       prevAnalysisForAnnotation = lastAnalysis;
       lastPlayedAnnotation = evaluatePlayedMoveAnnotation(
         prevAnalysisForAnnotation,
+        prevOpeningBookForAnnotation,
+        result.fen,
         turn,
         result.lines,
-        playedDestSq
+        playedMove
       );
     }
 
@@ -1097,10 +1289,14 @@
     }
 
     const prevGridSnapshot = lastGrid;
-    const playedDestSq =
+    const playedMove =
       lastPlacement && placement !== lastPlacement
-        ? diffPlayedDestination(prevGridSnapshot, boardInfo.grid, turn === "w" ? "b" : "w")
+        ? diffPlayedMove(prevGridSnapshot, boardInfo.grid, turn === "w" ? "b" : "w")
         : null;
+
+    if (lastPlacement && placement !== lastPlacement) {
+      prevOpeningBookForAnnotation = lastOpeningBook;
+    }
 
     lastPlacement = placement;
     lastGrid = boardInfo.grid.map((row) => row.slice());
@@ -1114,7 +1310,8 @@
         if (seq !== activeSearchSeq || !bookData) return;
         lastOpeningBook = bookData;
         if (lastAnalysis && lastAnalysis.fen === fen) {
-          publishResult(boardInfo, turn, lastAnalysis.result, playedDestSq);
+          lastAnalysis.result.lines = classifyCandidateAnnotations(lastAnalysis.result.lines, lastOpeningBook);
+          publishResult(boardInfo, turn, lastAnalysis.result, playedMove);
         }
       });
     } else {
@@ -1127,7 +1324,7 @@
         if (seq !== activeSearchSeq || !tbData) return;
         lastTablebase = tbData;
         if (lastAnalysis && lastAnalysis.fen === fen) {
-          publishResult(boardInfo, turn, lastAnalysis.result, playedDestSq);
+          publishResult(boardInfo, turn, lastAnalysis.result, playedMove);
         }
       });
     } else {
@@ -1145,10 +1342,10 @@
             if (seq !== activeSearchSeq) return;
             if (!chrome.runtime.lastError && resp && resp.ok && resp.result) {
               const enriched = enrichResult(fen, turn, resp.result);
-              publishResult(boardInfo, turn, enriched, playedDestSq);
+              publishResult(boardInfo, turn, enriched, playedMove);
             } else {
               const fallback = runFallbackJsAnalysis(fen, turn);
-              if (fallback) publishResult(boardInfo, turn, fallback, playedDestSq);
+              if (fallback) publishResult(boardInfo, turn, fallback, playedMove);
               else setStatus("ERROR");
             }
           }
@@ -1160,7 +1357,7 @@
 
     const fallback = runFallbackJsAnalysis(fen, turn);
     if (fallback && seq === activeSearchSeq) {
-      publishResult(boardInfo, turn, fallback, playedDestSq);
+      publishResult(boardInfo, turn, fallback, playedMove);
     }
   }
 

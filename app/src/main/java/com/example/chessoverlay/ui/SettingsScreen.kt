@@ -322,8 +322,8 @@ fun SettingsScreen(
                 )
 
                 SettingsToggleItem(
-                    title = "Move Annotations (!!, !?, ?!, ??)",
-                    subtitle = "Stamps Chess quality symbols directly on board squares",
+                    title = "Chess.com Move Annotations (!!, !, ★, Book, ✕, ??)",
+                    subtitle = "Stamps Brilliant, Great, Best, Book, Miss, Mistake & Blunder badges on board squares",
                     checked = config.showAnnotations,
                     testTag = "settings_switch_annotations",
                     onCheckedChange = onToggleAnnotations

@@ -13,6 +13,23 @@
   const elTbBadge = document.getElementById("tb-badge");
   const elTbHeader = document.getElementById("tb-header");
   const elTbMoves = document.getElementById("tb-moves");
+  const elLastMoveBadge = document.getElementById("last-move-badge");
+
+  function annotationColors(symbol) {
+    switch (symbol) {
+      case "!!": return { bg: "rgba(27,172,166,0.22)", fg: "#1BACA6" };
+      case "!": return { bg: "rgba(92,139,176,0.25)", fg: "#5C8BB0" };
+      case "★": return { bg: "rgba(129,182,76,0.22)", fg: "#81B64C" };
+      case "+": return { bg: "rgba(150,188,75,0.22)", fg: "#96BC4B" };
+      case "✓": return { bg: "rgba(149,183,118,0.22)", fg: "#95B776" };
+      case "Book": return { bg: "rgba(168,136,101,0.25)", fg: "#D5A46C" };
+      case "?!": return { bg: "rgba(247,198,49,0.22)", fg: "#F7C631" };
+      case "?": return { bg: "rgba(230,145,44,0.24)", fg: "#E6912C" };
+      case "✕": return { bg: "rgba(255,119,105,0.24)", fg: "#FF7769" };
+      case "??": return { bg: "rgba(202,52,49,0.25)", fg: "#CA3431" };
+      default: return { bg: "rgba(16,185,129,0.22)", fg: "#10B981" };
+    }
+  }
 
   const elEnabled = document.getElementById("toggle-enabled");
   const elCpu = document.getElementById("select-cpu");
@@ -171,6 +188,20 @@
     elBackendLabel.textContent = result.engineBackend || "Stockfish 19 WASM";
     renderStatus(result.status || "IDLE", result.engineBackend || "Stockfish 19 WASM");
 
+    if (elLastMoveBadge) {
+      const lm = result.lastMoveAnnotation;
+      if (lm && lm.symbol) {
+        const pal = annotationColors(lm.symbol);
+        elLastMoveBadge.style.display = "inline-block";
+        elLastMoveBadge.textContent = `${lm.sq} ${lm.symbol} ${lm.label || ""}`.trim();
+        elLastMoveBadge.style.borderColor = pal.fg;
+        elLastMoveBadge.style.color = pal.fg;
+        elLastMoveBadge.style.background = pal.bg;
+      } else {
+        elLastMoveBadge.style.display = "none";
+      }
+    }
+
     elLines.innerHTML = "";
     for (const line of result.lines) {
       const row = document.createElement("div");
@@ -179,8 +210,11 @@
       const left = document.createElement("span");
       left.textContent = `#${line.rank}  ${line.san} (${line.uci})`;
       if (line.annotation) {
+        const pal = annotationColors(line.annotation);
         const ann = document.createElement("span");
         ann.className = "ann-badge";
+        ann.style.background = pal.bg;
+        ann.style.color = pal.fg;
         ann.textContent = line.annotation;
         left.appendChild(ann);
       }

@@ -54,7 +54,10 @@
     <section class="card">
       <div class="card-title">
         <span id="backend-label">Stockfish 19 Analysis</span>
-        <button id="btn-reanalyze" type="button">Analyze</button>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span id="last-move-badge" class="pill-tag" style="display:none;">Last</span>
+          <button id="btn-reanalyze" type="button">Analyze</button>
+        </div>
       </div>
       <div id="lines-container" class="lines">
         <p class="muted">Open a Lichess.org or Chess.com board tab to stream Stockfish WASM evaluations.</p>
@@ -110,7 +113,7 @@
         <input type="checkbox" id="toggle-arrows" checked />
       </div>
       <div class="row">
-        <label for="toggle-annotations">Show Annotations (!! / ?!)</label>
+        <label for="toggle-annotations">Chess.com Annotations (!! / ★ / ?!)</label>
         <input type="checkbox" id="toggle-annotations" checked />
       </div>
       <div class="row">

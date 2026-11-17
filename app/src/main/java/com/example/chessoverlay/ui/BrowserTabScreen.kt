@@ -736,11 +736,32 @@ private fun LiveWebEvalStrip(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(
-                                        text = "#${line.rank}  ${line.san}${line.annotation} (${line.uci})",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = "#${line.rank}  ${line.san} (${line.uci})",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        if (line.annotation.isNotBlank()) {
+                                            val pillColor = annotationBadgeColor(line.annotation)
+                                            Surface(
+                                                shape = RoundedCornerShape(4.dp),
+                                                color = pillColor.copy(alpha = 0.22f),
+                                                border = BorderStroke(1.dp, pillColor.copy(alpha = 0.7f))
+                                            ) {
+                                                Text(
+                                                    text = line.annotation,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = pillColor,
+                                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                                )
+                                            }
+                                        }
+                                    }
                                     val sMate = line.whiteMate ?: line.mate
                                     val sCp = line.whiteCentipawns ?: line.centipawns
                                     val score = when {
@@ -919,8 +940,15 @@ private fun LiveWebEvalStrip(
 }
 
 private fun annotationBadgeColor(symbol: String): Color = when (symbol) {
-    "!!", "!" -> TacticalEmerald
-    "!?", "?!" -> TacticalAmber
-    "?", "??" -> TacticalRed
+    "!!" -> Color(0xFF1BACA6)      // Chess.com Brilliant Teal
+    "!" -> Color(0xFF5C8BB0)       // Chess.com Great Blue
+    "★" -> Color(0xFF81B64C)       // Chess.com Best Green
+    "+", "!?" -> Color(0xFF96BC4B) // Chess.com Excellent Light Green
+    "✓" -> Color(0xFF95B776)       // Chess.com Good Sage Green
+    "Book" -> Color(0xFFA88865)    // Chess.com Book Tan
+    "?!" -> Color(0xFFF7C631)      // Chess.com Inaccuracy Yellow
+    "?" -> Color(0xFFE6912C)       // Chess.com Mistake Orange
+    "✕" -> Color(0xFFFF7769)       // Chess.com Miss Coral
+    "??" -> Color(0xFFCA3431)      // Chess.com Blunder Crimson
     else -> TacticalEmerald
 }

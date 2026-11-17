@@ -51,11 +51,12 @@ class ChessForgeRobolectricTest {
         composeRule.onNodeWithTag("settings_switch_opening_book").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("settings_switch_annotations").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("settings_switch_adapt_theme").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("settings_switch_tablebase").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("eval_orientation_horizontal").performScrollTo().performClick()
         composeRule.waitForIdle()
 
-        // Navigate to Browser Workspace Tab & verify compact focus + expandable eval/book strip
-        composeRule.onNodeWithTag("tab_browser_button").performClick()
+        // Navigate via bottom NavigationBar to Browser Workspace Tab & verify compact focus + expandable eval/book/tb strip
+        composeRule.onNodeWithTag("nav_bottom_browser").assertIsDisplayed().performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("url_input_field").assertIsDisplayed()
         composeRule.onNodeWithTag("preset_lichess").assertIsDisplayed()
@@ -65,21 +66,31 @@ class ChessForgeRobolectricTest {
         composeRule.onNodeWithTag("live_web_eval_strip").assertIsDisplayed()
         composeRule.onNodeWithTag("live_strip_expand_button").performClick()
         composeRule.waitForIdle()
+
+        // Verify bottom Settings navigation item returns directly to Settings
+        composeRule.onNodeWithTag("nav_bottom_settings").assertIsDisplayed().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("settings_screen").assertIsDisplayed()
     }
 
     @Test
-    fun `bundled browser extension zip contains Stockfish 19 WASM, Opening Book, and MV3 scripts`() {
+    fun `bundled browser extension zip contains Stockfish 19 WASM, Opening Book, Syzygy Tablebase, and Chesscom annotations`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val engineJs = AssetManagerHelper.readAssetText(context, AssetManagerHelper.EXTENSION_ENGINE_JS)
         val bookJs = AssetManagerHelper.readAssetText(context, AssetManagerHelper.EXTENSION_OPENING_BOOK_JS)
+        val tablebaseJs = AssetManagerHelper.readAssetText(context, AssetManagerHelper.EXTENSION_SYZYGY_TABLEBASE_JS)
         val contentJs = AssetManagerHelper.readAssetText(context, AssetManagerHelper.EXTENSION_CONTENT_JS)
         assertTrue(engineJs.contains("ChessForgeEngine"))
         assertTrue(engineJs.contains("uciToSan"))
         assertTrue(bookJs.contains("ChessForgeOpeningBook"))
         assertTrue(bookJs.contains("Ruy Lopez"))
+        assertTrue(tablebaseJs.contains("ChessForgeTablebase"))
+        assertTrue(tablebaseJs.contains("tablebase.lichess.ovh"))
         assertTrue(contentJs.contains("STOCKFISH_ANALYZE"))
         assertTrue(contentJs.contains("detectBoardTheme"))
         assertTrue(contentJs.contains("classifyCandidateAnnotations"))
+        assertTrue(contentJs.contains("#1BACA6")) // Chess.com Brilliant Teal
+        assertTrue(contentJs.contains("#81B64C")) // Chess.com Best Star Green
         assertTrue(contentJs.contains("readLichessBoard"))
         assertTrue(contentJs.contains("readChessComBoard"))
 
@@ -95,6 +106,7 @@ class ChessForgeRobolectricTest {
             assertNotNull(zip.getEntry("src/offscreen.js"))
             assertNotNull(zip.getEntry("src/chess-engine.js"))
             assertNotNull(zip.getEntry("src/opening-book.js"))
+            assertNotNull(zip.getEntry("src/syzygy-tablebase.js"))
             assertNotNull(zip.getEntry("src/content.js"))
             assertNotNull(zip.getEntry("src/popup.html"))
             assertNotNull(zip.getEntry("src/background.js"))
@@ -102,7 +114,7 @@ class ChessForgeRobolectricTest {
     }
 
     @Test
-    fun `view model manages Stockfish WASM parameters and parses opening book, annotations, and board theme`() {
+    fun `view model manages Stockfish WASM parameters and parses opening book, Syzygy tablebase, Chesscom annotations, and board theme`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
         val vm = MainViewModel(app)
 
@@ -111,6 +123,7 @@ class ChessForgeRobolectricTest {
         vm.setSkillLevel(15)
         vm.setMultiPv(3)
         vm.setShowOpeningBook(true)
+        vm.setShowTablebase(true)
         vm.setShowAnnotations(true)
         vm.setAutoAdaptTheme(true)
         vm.setEvalBarOrientation(EvalBarOrientation.HORIZONTAL)
@@ -119,6 +132,7 @@ class ChessForgeRobolectricTest {
         assertEquals(20, cfg.maxDepth)
         assertEquals(15, cfg.skillLevel)
         assertEquals(3, cfg.multiPv)
+        assertEquals(true, cfg.showTablebase)
         assertEquals(EvalBarOrientation.HORIZONTAL, cfg.evalBarOrientation)
 
         val jsLiteral = cfg.toJsObjectLiteral()
@@ -126,6 +140,7 @@ class ChessForgeRobolectricTest {
         assertTrue(jsLiteral.contains("maxDepth:20"))
         assertTrue(jsLiteral.contains("showAnnotations:true"))
         assertTrue(jsLiteral.contains("showOpeningBook:true"))
+        assertTrue(jsLiteral.contains("showTablebase:true"))
         assertTrue(jsLiteral.contains("autoAdaptTheme:true"))
 
         vm.selectPreset(BrowserSitePreset.LICHESS)
@@ -133,7 +148,7 @@ class ChessForgeRobolectricTest {
         assertEquals(EngineStatus.LOADING, vm.engineStatus.value)
 
         vm.onWebAnalysisJson(
-            """{"fen":"r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3","depth":18,"nodes":240000,"elapsedMs":640,"engineBackend":"Stockfish 19 WASM","status":"IDLE","boardTheme":{"name":"Green • Dark UI","isDark":true,"hue":"green","accentHex":"#06B6D4"},"lastMoveAnnotation":{"sq":"b5","symbol":"!","label":"Best","cpLoss":0},"openingBook":{"inBook":true,"eco":"C60","opening":"Ruy Lopez","source":"Lichess Masters DB","moves":[{"uci":"a7a6","san":"a6","games":141200,"whitePct":37,"drawPct":40,"blackPct":23}]},"lines":[{"rank":1,"uci":"a7a6","san":"a6","annotation":"!!","centipawns":18,"whiteCp":-18,"mate":null,"whiteMate":null,"winPct":52.0,"whiteWinPct":48.0,"depth":18}]}"""
+            """{"fen":"8/8/8/8/8/3k4/3Q4/3K4 w - - 0 1","depth":18,"nodes":240000,"elapsedMs":640,"engineBackend":"Stockfish 19 WASM","status":"IDLE","boardTheme":{"name":"Green • Dark UI","isDark":true,"hue":"green","accentHex":"#06B6D4"},"lastMoveAnnotation":{"sq":"d2","symbol":"★","label":"Best","cpLoss":0},"openingBook":{"inBook":true,"eco":"C60","opening":"Ruy Lopez","source":"Lichess Masters DB","moves":[{"uci":"a7a6","san":"a6","games":141200,"whitePct":37,"drawPct":40,"blackPct":23}]},"tablebase":{"isTablebase":true,"pieceCount":3,"turn":"w","category":"win","outcome":"Tablebase Win","scoreBadge":"+M10","dtz":1,"dtm":10,"checkmate":false,"stalemate":false,"source":"Lichess Syzygy 7-Piece","moves":[{"uci":"d2f4","san":"Qf4","quality":"win","annotation":"!","dtm":9,"dtz":1,"checkmate":false,"stalemate":false}]},"lines":[{"rank":1,"uci":"d2f4","san":"Qf4","annotation":"!!","centipawns":9900,"whiteCp":9900,"mate":5,"whiteMate":5,"winPct":99.9,"whiteWinPct":99.9,"depth":18}]}"""
         )
         val snapshot = vm.liveAnalysis.value
         assertEquals(EngineStatus.IDLE, vm.engineStatus.value)
@@ -144,7 +159,13 @@ class ChessForgeRobolectricTest {
         assertEquals("C60", snapshot.openingBook?.eco)
         assertEquals("Ruy Lopez", snapshot.openingBook?.opening)
         assertEquals("a6", snapshot.openingBook?.moves?.first()?.san)
-        assertEquals("b5", snapshot.lastMoveAnnotation?.square)
-        assertEquals("!", snapshot.lastMoveAnnotation?.symbol)
+        assertEquals("d2", snapshot.lastMoveAnnotation?.square)
+        assertEquals("★", snapshot.lastMoveAnnotation?.symbol)
+        assertEquals("Best", snapshot.lastMoveAnnotation?.label)
+        assertEquals(true, snapshot.tablebase?.isTablebase)
+        assertEquals(3, snapshot.tablebase?.pieceCount)
+        assertEquals("Tablebase Win", snapshot.tablebase?.outcome)
+        assertEquals("+M10", snapshot.tablebase?.scoreBadge)
+        assertEquals("Qf4", snapshot.tablebase?.moves?.first()?.san)
     }
 }
