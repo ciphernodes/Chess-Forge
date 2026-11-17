@@ -52,6 +52,8 @@ class MainActivity : ComponentActivity() {
                 val exportStatus by viewModel.exportStatus.collectAsStateWithLifecycle()
                 val activeUrl by viewModel.activeUrl.collectAsStateWithLifecycle()
                 val reloadNonce by viewModel.reloadNonce.collectAsStateWithLifecycle()
+                val telemetryResetNonce by viewModel.telemetryResetNonce.collectAsStateWithLifecycle()
+                val telemetryStatusMessage by viewModel.telemetryStatusMessage.collectAsStateWithLifecycle()
                 val liveAnalysis by viewModel.liveAnalysis.collectAsStateWithLifecycle()
 
                 ChessForgeScreen(
@@ -62,6 +64,8 @@ class MainActivity : ComponentActivity() {
                     exportStatus = exportStatus,
                     activeUrl = activeUrl,
                     reloadNonce = reloadNonce,
+                    telemetryResetNonce = telemetryResetNonce,
+                    telemetryStatusMessage = telemetryStatusMessage,
                     liveAnalysis = liveAnalysis,
                     onSelectTab = viewModel::selectTab,
                     onExportZip = { saveZipLauncher.launch(AssetManagerHelper.EXTENSION_ZIP_ASSET) },
@@ -81,6 +85,10 @@ class MainActivity : ComponentActivity() {
                     onSelectSkillLevel = viewModel::setSkillLevel,
                     onSelectCpuProfile = viewModel::setCpuProfile,
                     onSelectTurn = viewModel::setTurnOverride,
+                    onToggleFairPlayAuditor = viewModel::setFairPlayAuditorEnabled,
+                    onToggleHumanizer = viewModel::setHumanizerEnabled,
+                    onSelectTargetElo = viewModel::setTargetElo,
+                    onClearSessionTelemetry = viewModel::clearSessionTelemetry,
                     onTogglePracticeAutoPlay = viewModel::setPracticeAutoPlay,
                     onChangePracticeDelay = viewModel::setPracticeHumanDelayMs,
                     onSelectPreset = viewModel::selectPreset,

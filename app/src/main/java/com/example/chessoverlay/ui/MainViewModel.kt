@@ -11,6 +11,8 @@ import com.example.chessoverlay.model.BrowserSitePreset
 import com.example.chessoverlay.model.CpuUsageProfile
 import com.example.chessoverlay.model.EngineStatus
 import com.example.chessoverlay.model.EvalBarOrientation
+import com.example.chessoverlay.model.FairPlayRiskLevel
+import com.example.chessoverlay.model.FairPlayStatus
 import com.example.chessoverlay.model.MoveAnnotationInfo
 import com.example.chessoverlay.model.OpeningBookMove
 import com.example.chessoverlay.model.OpeningBookState
@@ -55,6 +57,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _reloadNonce = MutableStateFlow(0)
     val reloadNonce: StateFlow<Int> = _reloadNonce.asStateFlow()
+
+    private val _telemetryResetNonce = MutableStateFlow(0)
+    val telemetryResetNonce: StateFlow<Int> = _telemetryResetNonce.asStateFlow()
+
+    private val _telemetryStatusMessage = MutableStateFlow<String?>(null)
+    val telemetryStatusMessage: StateFlow<String?> = _telemetryStatusMessage.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -136,13 +144,59 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setEvalBarOrientation(orientation: EvalBarOrientation) =
         updateConfig { it.copy(evalBarOrientation = orientation) }
 
-    fun setMultiPv(multiPv: Int) = updateConfig { it.copy(multiPv = multiPv.coerceIn(1, 3)) }
+    fun setMultiPv(multiPv: Int) = updateConfig { it.copy(multiPv = multiPv.coerceIn(1, 4)) }
 
     fun setMaxDepth(depth: Int) = updateConfig { it.copy(maxDepth = depth.coerceIn(2, 20)) }
 
     fun setSkillLevel(skill: Int) = updateConfig { it.copy(skillLevel = skill.coerceIn(0, 20)) }
 
     fun setCpuProfile(profile: CpuUsageProfile) = updateConfig { it.copy(cpuProfile = profile) }
+
+    fun setFairPlayAuditorEnabled(enabled: Boolean) {
+        updateConfig { it.copy(fairPlayAuditorEnabled = enabled) }
+        if (!enabled) {
+            _liveAnalysis.update { snap ->
+                snap.copy(
+                    fairPlayStatus = snap.fairPlayStatus.copy(
+                        riskLevel = FairPlayRiskLevel.SAFE,
+                        lockedOut = false
+                    )
+                )
+            }
+        }
+    }
+
+    fun setHumanizerEnabled(enabled: Boolean) = updateConfig { it.copy(humanizerEnabled = enabled) }
+
+    fun setTargetElo(elo: Int) = updateConfig { it.copy(targetElo = elo.coerceIn(400, 3000)) }
+
+    fun setMaxHintsPerGame(hints: Int) = updateConfig { it.copy(maxHintsPerGame = hints.coerceIn(1, 5)) }
+
+    fun clearSessionTelemetry() {
+        viewModelScope.launch {
+            preferences.clearSessionTelemetryStorage()
+        }
+        val baseline = _extensionConfig.value.targetElo
+        _liveAnalysis.update { current ->
+            current.copy(
+                fairPlayStatus = FairPlayStatus(
+                    riskLevel = FairPlayRiskLevel.SAFE,
+                    lockedOut = false,
+                    lockoutReason = null,
+                    baselineElo = baseline,
+                    observedIpr = baseline,
+                    zScore = 0f,
+                    currentGameMoves = 0,
+                    currentGameSiSpikes = 0,
+                    slidingWindowGames = 0,
+                    acpl = 0f,
+                    warnings = emptyList()
+                )
+            )
+        }
+        _telemetryResetNonce.update { it + 1 }
+        _telemetryStatusMessage.value = "Session telemetry storage cleared (0/20 window games, SAFE)."
+    }
 
     fun setPracticeAutoPlay(enabled: Boolean) = updateConfig { it.copy(practiceAutoPlay = enabled) }
 
@@ -305,6 +359,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             } else null
 
+            val fpObj = root.optJSONObject("fairPlay")
+            val parsedFairPlay = if (fpObj != null) {
+                val warnArr = fpObj.optJSONArray("warnings")
+                val warnList = buildList {
+                    if (warnArr != null) {
+                        for (i in 0 until warnArr.length()) {
+                            val w = warnArr.optJSONObject(i) ?: continue
+                            val msg = w.optString("message", "")
+                            if (msg.isNotBlank()) add(msg)
+                        }
+                    }
+                }
+                val baseline = fpObj.optInt("baselineElo", _extensionConfig.value.targetElo)
+                FairPlayStatus(
+                    riskLevel = FairPlayRiskLevel.fromKey(fpObj.optString("riskLevel", "SAFE")),
+                    lockedOut = fpObj.optBoolean("lockedOut", false),
+                    lockoutReason = fpObj.optString("lockoutReason", "").takeIf { it.isNotBlank() },
+                    baselineElo = baseline,
+                    observedIpr = fpObj.optInt("observedIpr", baseline),
+                    zScore = fpObj.optDouble("zScore", 0.0).toFloat(),
+                    currentGameMoves = fpObj.optInt("currentGameMoves", 0),
+                    currentGameSiSpikes = fpObj.optInt("currentGameSiSpikes", 0),
+                    slidingWindowGames = fpObj.optInt("slidingWindowGames", 0),
+                    acpl = fpObj.optDouble("acpl", 0.0).toFloat(),
+                    warnings = warnList
+                )
+            } else _liveAnalysis.value.fairPlayStatus
+
             _engineStatus.value = parsedStatus
             _liveAnalysis.value = BrowserAnalysisSnapshot(
                 fen = fen,
@@ -317,7 +399,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 openingBook = parsedBook,
                 tablebase = parsedTb,
                 boardTheme = parsedTheme,
-                lastMoveAnnotation = parsedAnn
+                lastMoveAnnotation = parsedAnn,
+                fairPlayStatus = parsedFairPlay
             )
         } catch (t: Throwable) {
             AppLogger.w(TAG, "Failed parsing browser engine update: ${t.message}")

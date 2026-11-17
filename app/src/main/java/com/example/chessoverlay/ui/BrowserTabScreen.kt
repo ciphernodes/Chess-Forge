@@ -86,6 +86,7 @@ import com.example.chessoverlay.model.EngineStatus
 import com.example.chessoverlay.model.EvalBarOrientation
 import com.example.chessoverlay.ui.components.EngineStatusIndicator
 import com.example.chessoverlay.ui.components.EvaluationBar
+import com.example.chessoverlay.ui.components.FairPlayStatusIndicator
 import com.example.chessoverlay.ui.theme.CarbonSurface
 import com.example.chessoverlay.ui.theme.CarbonSurfaceHigh
 import com.example.chessoverlay.ui.theme.HairlineBorder
@@ -109,6 +110,7 @@ class ChessForgeWebBridge(
 fun BrowserWorkspaceTab(
     activeUrl: String,
     reloadNonce: Int,
+    telemetryResetNonce: Int = 0,
     extensionConfig: BrowserExtensionConfig,
     engineStatus: EngineStatus,
     liveAnalysis: BrowserAnalysisSnapshot,
@@ -146,6 +148,16 @@ fun BrowserWorkspaceTab(
     LaunchedEffect(extensionConfig) {
         val wv = webViewRef ?: return@LaunchedEffect
         val js = "window.__chessForgeUpdateConfig && window.__chessForgeUpdateConfig(${extensionConfig.toJsObjectLiteral()});"
+        try {
+            wv.evaluateJavascript(js, null)
+        } catch (_: Throwable) {
+        }
+    }
+
+    LaunchedEffect(telemetryResetNonce) {
+        if (telemetryResetNonce <= 0) return@LaunchedEffect
+        val wv = webViewRef ?: return@LaunchedEffect
+        val js = "window.__ChessForgeHumanizer && window.__ChessForgeHumanizer.clearSessionTelemetry && window.__ChessForgeHumanizer.clearSessionTelemetry();"
         try {
             wv.evaluateJavascript(js, null)
         } catch (_: Throwable) {
@@ -423,6 +435,12 @@ fun BrowserWorkspaceTab(
                         status = engineStatus,
                         backendLabel = liveAnalysis.engineBackend
                     )
+
+                    FairPlayStatusIndicator(
+                        status = liveAnalysis.fairPlayStatus,
+                        auditorEnabled = extensionConfig.fairPlayAuditorEnabled,
+                        compact = true
+                    )
                 }
             }
 
@@ -571,6 +589,17 @@ fun BrowserWorkspaceTab(
                             }
                         )
                     }
+
+                    // Live FairPlay Risk Level Overlay Status Indicator (SAFE / ELEVATED / LOCKOUT)
+                    FairPlayStatusIndicator(
+                        status = liveAnalysis.fairPlayStatus,
+                        auditorEnabled = extensionConfig.fairPlayAuditorEnabled,
+                        compact = true,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(10.dp)
+                            .testTag("browser_fairplay_overlay_indicator")
+                    )
                 }
             }
 

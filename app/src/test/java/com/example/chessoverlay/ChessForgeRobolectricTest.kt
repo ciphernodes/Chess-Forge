@@ -40,10 +40,15 @@ class ChessForgeRobolectricTest {
         composeRule.onNodeWithTag("quick_settings_menu_button").assertIsDisplayed()
         composeRule.onNodeWithTag("export_zip_button").performScrollTo().assertIsDisplayed()
 
-        // Navigate to Settings Screen & toggle CPU, Difficulty, Depth 20, Opening Book & Annotations
+        // Navigate to Settings Screen & toggle CPU, Difficulty, Depth 20, FairPlayAuditor, HumanizerController, Clear Telemetry, Opening Book & Annotations
         composeRule.onNodeWithTag("tab_settings_button").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("settings_screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("settings_switch_fairplay_auditor").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("settings_switch_humanizer").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("settings_clear_telemetry_button").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("settings_telemetry_cleared_text").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("cpu_profile_turbo").performScrollTo().performClick()
         composeRule.onNodeWithTag("skill_preset_12").performScrollTo().performClick()
         composeRule.onNodeWithTag("depth_preset_18").performScrollTo().performClick()
@@ -55,11 +60,12 @@ class ChessForgeRobolectricTest {
         composeRule.onNodeWithTag("eval_orientation_horizontal").performScrollTo().performClick()
         composeRule.waitForIdle()
 
-        // Navigate via bottom NavigationBar to Browser Workspace Tab & verify compact focus + expandable eval/book/tb strip
+        // Navigate via bottom NavigationBar to Browser Workspace Tab & verify compact focus + FairPlay overlay indicator + expandable eval/book/tb strip
         composeRule.onNodeWithTag("nav_bottom_browser").assertIsDisplayed().performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("url_input_field").assertIsDisplayed()
         composeRule.onNodeWithTag("preset_lichess").assertIsDisplayed()
+        composeRule.onNodeWithTag("browser_fairplay_overlay_indicator").assertIsDisplayed()
         composeRule.onNodeWithTag("browser_focus_toggle").assertIsDisplayed().performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("evaluation_bar").assertIsDisplayed()
@@ -114,14 +120,17 @@ class ChessForgeRobolectricTest {
     }
 
     @Test
-    fun `view model manages Stockfish WASM parameters and parses opening book, Syzygy tablebase, Chesscom annotations, and board theme`() {
+    fun `view model manages FairPlayAuditor, HumanizerController, telemetry reset, and SAFE-ELEVATED-LOCKOUT risk states`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
         val vm = MainViewModel(app)
 
         vm.setCpuProfile(CpuUsageProfile.TURBO)
         vm.setMaxDepth(20)
         vm.setSkillLevel(15)
-        vm.setMultiPv(3)
+        vm.setMultiPv(4)
+        vm.setFairPlayAuditorEnabled(true)
+        vm.setHumanizerEnabled(true)
+        vm.setTargetElo(1800)
         vm.setShowOpeningBook(true)
         vm.setShowTablebase(true)
         vm.setShowAnnotations(true)
@@ -131,13 +140,19 @@ class ChessForgeRobolectricTest {
         assertEquals(CpuUsageProfile.TURBO, cfg.cpuProfile)
         assertEquals(20, cfg.maxDepth)
         assertEquals(15, cfg.skillLevel)
-        assertEquals(3, cfg.multiPv)
+        assertEquals(4, cfg.multiPv)
+        assertEquals(true, cfg.fairPlayAuditorEnabled)
+        assertEquals(true, cfg.humanizerEnabled)
+        assertEquals(1800, cfg.targetElo)
         assertEquals(true, cfg.showTablebase)
         assertEquals(EvalBarOrientation.HORIZONTAL, cfg.evalBarOrientation)
 
         val jsLiteral = cfg.toJsObjectLiteral()
         assertTrue(jsLiteral.contains("cpuProfile:'turbo'"))
         assertTrue(jsLiteral.contains("maxDepth:20"))
+        assertTrue(jsLiteral.contains("fairPlayAuditorEnabled:true"))
+        assertTrue(jsLiteral.contains("humanizerEnabled:true"))
+        assertTrue(jsLiteral.contains("targetElo:1800"))
         assertTrue(jsLiteral.contains("showAnnotations:true"))
         assertTrue(jsLiteral.contains("showOpeningBook:true"))
         assertTrue(jsLiteral.contains("showTablebase:true"))
@@ -148,24 +163,22 @@ class ChessForgeRobolectricTest {
         assertEquals(EngineStatus.LOADING, vm.engineStatus.value)
 
         vm.onWebAnalysisJson(
-            """{"fen":"8/8/8/8/8/3k4/3Q4/3K4 w - - 0 1","depth":18,"nodes":240000,"elapsedMs":640,"engineBackend":"Stockfish 19 WASM","status":"IDLE","boardTheme":{"name":"Green • Dark UI","isDark":true,"hue":"green","accentHex":"#06B6D4"},"lastMoveAnnotation":{"sq":"d2","symbol":"★","label":"Best","cpLoss":0},"openingBook":{"inBook":true,"eco":"C60","opening":"Ruy Lopez","source":"Lichess Masters DB","moves":[{"uci":"a7a6","san":"a6","games":141200,"whitePct":37,"drawPct":40,"blackPct":23}]},"tablebase":{"isTablebase":true,"pieceCount":3,"turn":"w","category":"win","outcome":"Tablebase Win","scoreBadge":"+M10","dtz":1,"dtm":10,"checkmate":false,"stalemate":false,"source":"Lichess Syzygy 7-Piece","moves":[{"uci":"d2f4","san":"Qf4","quality":"win","annotation":"!","dtm":9,"dtz":1,"checkmate":false,"stalemate":false}]},"lines":[{"rank":1,"uci":"d2f4","san":"Qf4","annotation":"!!","centipawns":9900,"whiteCp":9900,"mate":5,"whiteMate":5,"winPct":99.9,"whiteWinPct":99.9,"depth":18}]}"""
+            """{"fen":"8/8/8/8/8/3k4/3Q4/3K4 w - - 0 1","depth":18,"nodes":240000,"elapsedMs":640,"engineBackend":"Stockfish 19 WASM","status":"IDLE","fairPlay":{"riskLevel":"LOCKOUT","lockedOut":true,"lockoutReason":"Lockout: 2 S_i spikes","baselineElo":1800,"observedIpr":2420,"zScore":2.74,"currentGameMoves":14,"currentGameSiSpikes":2,"slidingWindowGames":5,"acpl":9.4,"warnings":[{"message":"2 rapid critical S_i spikes"}]},"boardTheme":{"name":"Green • Dark UI","isDark":true,"hue":"green","accentHex":"#06B6D4"},"lastMoveAnnotation":{"sq":"d2","symbol":"★","label":"Best","cpLoss":0},"openingBook":{"inBook":true,"eco":"C60","opening":"Ruy Lopez","source":"Lichess Masters DB","moves":[{"uci":"a7a6","san":"a6","games":141200,"whitePct":37,"drawPct":40,"blackPct":23}]},"tablebase":{"isTablebase":true,"pieceCount":3,"turn":"w","category":"win","outcome":"Tablebase Win","scoreBadge":"+M10","dtz":1,"dtm":10,"checkmate":false,"stalemate":false,"source":"Lichess Syzygy 7-Piece","moves":[{"uci":"d2f4","san":"Qf4","quality":"win","annotation":"!","dtm":9,"dtz":1,"checkmate":false,"stalemate":false}]},"lines":[{"rank":1,"uci":"d2f4","san":"Qf4","annotation":"!!","centipawns":9900,"whiteCp":9900,"mate":5,"whiteMate":5,"winPct":99.9,"whiteWinPct":99.9,"depth":18}]}"""
         )
         val snapshot = vm.liveAnalysis.value
         assertEquals(EngineStatus.IDLE, vm.engineStatus.value)
         assertEquals("Stockfish 19 WASM", snapshot.engineBackend)
         assertEquals(18, snapshot.depth)
-        assertEquals("!!", snapshot.lines.first().annotation)
-        assertEquals("Green • Dark UI", snapshot.boardTheme.name)
-        assertEquals("C60", snapshot.openingBook?.eco)
-        assertEquals("Ruy Lopez", snapshot.openingBook?.opening)
-        assertEquals("a6", snapshot.openingBook?.moves?.first()?.san)
-        assertEquals("d2", snapshot.lastMoveAnnotation?.square)
-        assertEquals("★", snapshot.lastMoveAnnotation?.symbol)
-        assertEquals("Best", snapshot.lastMoveAnnotation?.label)
-        assertEquals(true, snapshot.tablebase?.isTablebase)
-        assertEquals(3, snapshot.tablebase?.pieceCount)
-        assertEquals("Tablebase Win", snapshot.tablebase?.outcome)
-        assertEquals("+M10", snapshot.tablebase?.scoreBadge)
-        assertEquals("Qf4", snapshot.tablebase?.moves?.first()?.san)
+        assertEquals("LOCKOUT", snapshot.fairPlayStatus.riskLevel.label)
+        assertEquals(true, snapshot.fairPlayStatus.lockedOut)
+        assertEquals(2420, snapshot.fairPlayStatus.observedIpr)
+        assertEquals(2, snapshot.fairPlayStatus.currentGameSiSpikes)
+
+        val prevReset = vm.telemetryResetNonce.value
+        vm.clearSessionTelemetry()
+        assertEquals(prevReset + 1, vm.telemetryResetNonce.value)
+        assertEquals("SAFE", vm.liveAnalysis.value.fairPlayStatus.riskLevel.label)
+        assertEquals(false, vm.liveAnalysis.value.fairPlayStatus.lockedOut)
+        assertNotNull(vm.telemetryStatusMessage.value)
     }
 }

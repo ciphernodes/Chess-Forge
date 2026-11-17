@@ -41,6 +41,8 @@
   const elMultiPv = document.getElementById("select-multipv");
   const elElo = document.getElementById("select-elo");
   const elHumanizer = document.getElementById("toggle-humanizer");
+  const elFairPlayToggle = document.getElementById("toggle-fairplay");
+  const elClearTelemetry = document.getElementById("btn-clear-telemetry");
   const elTurn = document.getElementById("select-turn");
   const elEvalBar = document.getElementById("toggle-evalbar");
   const elArrows = document.getElementById("toggle-arrows");
@@ -60,6 +62,7 @@
     skillLevel: 20,
     multiPv: 4,
     targetElo: 1500,
+    fairPlayAuditorEnabled: true,
     humanizerEnabled: true,
     turnOverride: "auto",
     showEvalBar: true,
@@ -273,6 +276,7 @@
     elMultiPv.value = String(data.multiPv || 4);
     if (elElo) elElo.value = String(data.targetElo || 1500);
     if (elHumanizer) elHumanizer.checked = data.humanizerEnabled !== false;
+    if (elFairPlayToggle) elFairPlayToggle.checked = data.fairPlayAuditorEnabled !== false;
     elTurn.value = data.turnOverride || "auto";
     elEvalBar.checked = data.showEvalBar !== false;
     elArrows.checked = data.showArrows !== false;
@@ -308,6 +312,20 @@
   elMultiPv.addEventListener("change", () => pushConfigToActiveTab({ multiPv: parseInt(elMultiPv.value, 10) }));
   if (elElo) elElo.addEventListener("change", () => pushConfigToActiveTab({ targetElo: parseInt(elElo.value, 10) }));
   if (elHumanizer) elHumanizer.addEventListener("change", () => pushConfigToActiveTab({ humanizerEnabled: elHumanizer.checked }));
+  if (elFairPlayToggle) elFairPlayToggle.addEventListener("change", () => pushConfigToActiveTab({ fairPlayAuditorEnabled: elFairPlayToggle.checked }));
+  if (elClearTelemetry) {
+    elClearTelemetry.addEventListener("click", () => {
+      chrome.storage.local.remove("chessForgeFairPlayWindowV1", () => {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          if (!tabs || !tabs[0]) return;
+          chrome.tabs.sendMessage(tabs[0].id, { type: "CLEAR_FAIRPLAY_TELEMETRY" }, (resp) => {
+            if (chrome.runtime.lastError) return;
+            if (resp && resp.fairPlay) renderFairPlay(resp.fairPlay);
+          });
+        });
+      });
+    });
+  }
   elTurn.addEventListener("change", () => pushConfigToActiveTab({ turnOverride: elTurn.value }));
   elEvalBar.addEventListener("change", () => pushConfigToActiveTab({ showEvalBar: elEvalBar.checked }));
   elArrows.addEventListener("change", () => pushConfigToActiveTab({ showArrows: elArrows.checked }));

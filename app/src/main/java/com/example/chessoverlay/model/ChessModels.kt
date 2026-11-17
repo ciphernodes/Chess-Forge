@@ -47,6 +47,32 @@ enum class EvalBarOrientation(val key: String, val label: String) {
     }
 }
 
+enum class FairPlayRiskLevel(val key: String, val label: String) {
+    SAFE("SAFE", "SAFE"),
+    ELEVATED("ELEVATED", "ELEVATED"),
+    LOCKOUT("LOCKOUT", "LOCKOUT");
+
+    companion object {
+        fun fromKey(key: String?): FairPlayRiskLevel {
+            return entries.firstOrNull { it.key.equals(key, ignoreCase = true) } ?: SAFE
+        }
+    }
+}
+
+data class FairPlayStatus(
+    val riskLevel: FairPlayRiskLevel = FairPlayRiskLevel.SAFE,
+    val lockedOut: Boolean = false,
+    val lockoutReason: String? = null,
+    val baselineElo: Int = 1500,
+    val observedIpr: Int = 1500,
+    val zScore: Float = 0f,
+    val currentGameMoves: Int = 0,
+    val currentGameSiSpikes: Int = 0,
+    val slidingWindowGames: Int = 0,
+    val acpl: Float = 0f,
+    val warnings: List<String> = emptyList()
+)
+
 data class BrowserExtensionConfig(
     val enabled: Boolean = true,
     val showArrows: Boolean = true,
@@ -62,6 +88,10 @@ data class BrowserExtensionConfig(
     val skillLevel: Int = 20,
     val cpuProfile: CpuUsageProfile = CpuUsageProfile.BALANCED,
     val turnOverride: String = "auto",
+    val fairPlayAuditorEnabled: Boolean = true,
+    val humanizerEnabled: Boolean = true,
+    val targetElo: Int = 1500,
+    val maxHintsPerGame: Int = 3,
     val practiceAutoPlay: Boolean = false,
     val practiceHumanDelayMs: Int = 650
 ) {
@@ -80,11 +110,15 @@ data class BrowserExtensionConfig(
             "showTablebase:$showTablebase," +
             "autoAdaptTheme:$autoAdaptTheme," +
             "evalBarOrientation:'${evalBarOrientation.key}'," +
-            "multiPv:${multiPv.coerceIn(1, 3)}," +
+            "multiPv:${multiPv.coerceIn(1, 4)}," +
             "maxDepth:${maxDepth.coerceIn(2, 20)}," +
             "skillLevel:${skillLevel.coerceIn(0, 20)}," +
             "cpuProfile:'${cpuProfile.key}'," +
             "turnOverride:'$safeTurn'," +
+            "fairPlayAuditorEnabled:$fairPlayAuditorEnabled," +
+            "humanizerEnabled:$humanizerEnabled," +
+            "targetElo:${targetElo.coerceIn(400, 3000)}," +
+            "maxHintsPerGame:${maxHintsPerGame.coerceIn(1, 5)}," +
             "practiceAutoPlay:$practiceAutoPlay," +
             "practiceHumanDelayMs:${practiceHumanDelayMs.coerceIn(250, 2500)}" +
             "}"
@@ -180,5 +214,6 @@ data class BrowserAnalysisSnapshot(
     val openingBook: OpeningBookState? = null,
     val tablebase: TablebaseState? = null,
     val boardTheme: BoardThemeInfo = BoardThemeInfo(),
-    val lastMoveAnnotation: MoveAnnotationInfo? = null
+    val lastMoveAnnotation: MoveAnnotationInfo? = null,
+    val fairPlayStatus: FairPlayStatus = FairPlayStatus()
 )

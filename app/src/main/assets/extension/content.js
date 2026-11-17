@@ -26,6 +26,7 @@
     skillLevel: 20,
     cpuProfile: "balanced",
     turnOverride: "auto",
+    fairPlayAuditorEnabled: true,
     humanizerEnabled: true,
     targetElo: 1500,
     maxHintsPerGame: 3,
@@ -1419,11 +1420,14 @@
 
   function renderFairPlayPill() {
     if (!fairPlayPill) return;
-    const snap = fairPlayState.lastSnapshot;
-    if (!config.humanizerEnabled && snap.riskLevel === "SAFE") {
-      fairPlayPill.style.display = "none";
+    if (config.fairPlayAuditorEnabled === false) {
+      fairPlayPill.style.display = "flex";
+      fairPlayPill.style.borderColor = "#6E7681";
+      fairPlayPill.style.color = "#8B949E";
+      fairPlayPill.textContent = "FairPlay: OFF";
       return;
     }
+    const snap = fairPlayState.lastSnapshot;
     const palette = snap.riskLevel === "LOCKOUT"
       ? { border: "#EF4444", text: "#FCA5A5", label: `LOCKOUT • Z=${snap.zScore.toFixed(1)}σ` }
       : snap.riskLevel === "ELEVATED"
@@ -1437,7 +1441,7 @@
 
   function evaluateHumanizerDecision(fen, turn, result) {
     const snap = recomputeFairPlaySnapshot();
-    if (snap.lockedOut) {
+    if (config.fairPlayAuditorEnabled !== false && snap.lockedOut) {
       return { allow: false, reason: "LOCKOUT", delayMs: 0, result };
     }
     if (!config.humanizerEnabled) {
@@ -1515,6 +1519,30 @@
     };
   }
 
+  function clearSessionTelemetry() {
+    hintsUsedInGame = 0;
+    shownHintFens.clear();
+    fairPlayState.windowGames = [];
+    fairPlayState.currentMoves = [];
+    fairPlayState.lockedOut = false;
+    fairPlayState.lockoutReason = null;
+    if (hasChromeStorage()) {
+      try {
+        chrome.storage.local.remove(FAIR_PLAY_KEY);
+      } catch (_) {}
+    }
+    const snap = recomputeFairPlaySnapshot();
+    if (typeof window.ChessForgeAndroidBridge !== "undefined" &&
+        typeof window.ChessForgeAndroidBridge.onAnalysisUpdate === "function" &&
+        lastAnalysis) {
+      window.ChessForgeAndroidBridge.onAnalysisUpdate(JSON.stringify(
+        Object.assign({}, lastAnalysis.result, { fairPlay: snap })
+      ));
+    }
+    runAnalysis(true);
+    return snap;
+  }
+
   window.__ChessForgeHumanizer = {
     getSnapshot: () => fairPlayState.lastSnapshot,
     resetGame: () => {
@@ -1522,7 +1550,8 @@
       shownHintFens.clear();
       fairPlayState.currentMoves = [];
       recomputeFairPlaySnapshot();
-    }
+    },
+    clearSessionTelemetry
   };
 
   function publishResult(boardInfo, turn, result, playedMove) {
@@ -1540,7 +1569,9 @@
         result.lines,
         playedMove
       );
-      recordCompletedMoveForAuditor(prevAnalysisForAnnotation, playedMove, turn);
+      if (config.fairPlayAuditorEnabled !== false) {
+        recordCompletedMoveForAuditor(prevAnalysisForAnnotation, playedMove, turn);
+      }
     }
 
     lastAnalysis = { fen: result.fen, turn, result };
@@ -1783,12 +1814,20 @@
       } else if (msg.type === "FORCE_ANALYZE") {
         runAnalysis(true);
         sendResponse({ ok: true, engineStatus, lastAnalysis: lastAnalysis ? lastAnalysis.result : null });
+      } else if (msg.type === "CLEAR_FAIRPLAY_TELEMETRY") {
+        const snap = clearSessionTelemetry();
+        sendResponse({ ok: true, fairPlay: snap });
       }
     });
   }
 
   window.__chessForgeUpdateConfig = function (partial) {
     config = Object.assign({}, config, partial || {});
+    if (config.fairPlayAuditorEnabled === false) {
+      fairPlayState.lockedOut = false;
+      fairPlayState.lockoutReason = null;
+      recomputeFairPlaySnapshot();
+    }
     runAnalysis(true);
   };
 

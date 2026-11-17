@@ -20,18 +20,21 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Memory
-import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -50,12 +53,15 @@ import com.example.chessoverlay.model.BrowserExtensionConfig
 import com.example.chessoverlay.model.CpuUsageProfile
 import com.example.chessoverlay.model.EngineStatus
 import com.example.chessoverlay.model.EvalBarOrientation
+import com.example.chessoverlay.model.FairPlayStatus
 import com.example.chessoverlay.ui.components.EngineStatusIndicator
+import com.example.chessoverlay.ui.components.FairPlayStatusIndicator
 import com.example.chessoverlay.ui.theme.CarbonSurface
 import com.example.chessoverlay.ui.theme.CarbonSurfaceHigh
 import com.example.chessoverlay.ui.theme.HairlineBorder
 import com.example.chessoverlay.ui.theme.TacticalAmber
 import com.example.chessoverlay.ui.theme.TacticalEmerald
+import com.example.chessoverlay.ui.theme.TacticalRed
 import kotlin.math.roundToInt
 
 @Composable
@@ -63,6 +69,8 @@ fun SettingsScreen(
     config: BrowserExtensionConfig,
     engineStatus: EngineStatus,
     engineBackend: String,
+    fairPlayStatus: FairPlayStatus = FairPlayStatus(),
+    telemetryStatusMessage: String? = null,
     onSelectCpuProfile: (CpuUsageProfile) -> Unit,
     onSelectDepth: (Int) -> Unit,
     onSelectSkillLevel: (Int) -> Unit,
@@ -76,6 +84,10 @@ fun SettingsScreen(
     onToggleAutoAdaptTheme: (Boolean) -> Unit,
     onToggleHud: (Boolean) -> Unit,
     onSelectTurn: (String) -> Unit,
+    onToggleFairPlayAuditor: (Boolean) -> Unit = {},
+    onToggleHumanizer: (Boolean) -> Unit = {},
+    onSelectTargetElo: (Int) -> Unit = {},
+    onClearSessionTelemetry: () -> Unit = {},
     onTogglePracticeAutoPlay: (Boolean) -> Unit,
     onChangePracticeDelay: (Int) -> Unit
 ) {
@@ -110,6 +122,129 @@ fun SettingsScreen(
                     status = engineStatus,
                     backendLabel = engineBackend
                 )
+            }
+
+            // FairPlayAuditor & HumanizerController Guardrails Card
+            SettingsSectionCard(
+                title = "FairPlay & Humanizer Guardrails",
+                icon = Icons.Default.Security
+            ) {
+                FairPlayStatusIndicator(
+                    status = fairPlayStatus,
+                    auditorEnabled = config.fairPlayAuditorEnabled,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = CarbonSurfaceHigh,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(
+                            text = "Observed IPR: ${fairPlayStatus.observedIpr} • Z-Score: ${"%.2f".format(fairPlayStatus.zScore)}σ • S_i Spikes: ${fairPlayStatus.currentGameSiSpikes}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Sliding Window: ${fairPlayStatus.slidingWindowGames}/20 games • ACPL: ${"%.1f".format(fairPlayStatus.acpl)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                SettingsToggleItem(
+                    title = "FairPlayAuditor",
+                    subtitle = "Tracks IPR Z-scores & S_i spikes across a 20-game window and enforces SAFE / ELEVATED / LOCKOUT circuit breaker",
+                    checked = config.fairPlayAuditorEnabled,
+                    testTag = "settings_switch_fairplay_auditor",
+                    onCheckedChange = onToggleFairPlayAuditor
+                )
+
+                SettingsToggleItem(
+                    title = "HumanizerController",
+                    subtitle = "Filters raw lines with human plausibility priors, WDL criticality gates (Delta_E >= 0.14), complexity delays & <15s clock decay",
+                    checked = config.humanizerEnabled,
+                    testTag = "settings_switch_humanizer",
+                    onCheckedChange = onToggleHumanizer
+                )
+
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Target Calibration Rating",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "${config.targetElo} Elo",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = TacticalEmerald
+                        )
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(1000, 1300, 1500, 1800, 2100, 2400).forEach { elo ->
+                            FilterChip(
+                                selected = config.targetElo == elo,
+                                onClick = { onSelectTargetElo(elo) },
+                                label = { Text("$elo", maxLines = 1) },
+                                modifier = Modifier
+                                    .height(48.dp)
+                                    .testTag("settings_elo_$elo"),
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = TacticalEmerald.copy(alpha = 0.2f),
+                                    selectedLabelColor = TacticalEmerald
+                                )
+                            )
+                        }
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = onClearSessionTelemetry,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("settings_clear_telemetry_button"),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, TacticalRed.copy(alpha = 0.65f)),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = TacticalRed
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.DeleteSweep,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Clear Session Telemetry Storage",
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
+
+                if (!telemetryStatusMessage.isNullOrBlank()) {
+                    Text(
+                        text = telemetryStatusMessage,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = TacticalEmerald,
+                        modifier = Modifier.testTag("settings_telemetry_cleared_text")
+                    )
+                }
             }
 
             // CPU Usage Profile Card
@@ -282,7 +417,7 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        listOf(1, 2, 3).forEach { pv ->
+                        listOf(1, 2, 3, 4).forEach { pv ->
                             val active = config.multiPv == pv
                             Surface(
                                 modifier = Modifier

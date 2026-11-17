@@ -80,6 +80,7 @@ import com.example.chessoverlay.model.EvalBarOrientation
 import com.example.chessoverlay.model.WorkspaceTab
 import com.example.chessoverlay.ui.components.EngineStatusIndicator
 import com.example.chessoverlay.ui.components.EvaluationBar
+import com.example.chessoverlay.ui.components.FairPlayStatusIndicator
 import com.example.chessoverlay.ui.theme.CarbonSurface
 import com.example.chessoverlay.ui.theme.CarbonSurfaceHigh
 import com.example.chessoverlay.ui.theme.HairlineBorder
@@ -97,6 +98,8 @@ fun ChessForgeScreen(
     exportStatus: String?,
     activeUrl: String,
     reloadNonce: Int,
+    telemetryResetNonce: Int = 0,
+    telemetryStatusMessage: String? = null,
     liveAnalysis: BrowserAnalysisSnapshot,
     onSelectTab: (WorkspaceTab) -> Unit,
     onExportZip: () -> Unit,
@@ -116,6 +119,10 @@ fun ChessForgeScreen(
     onSelectSkillLevel: (Int) -> Unit,
     onSelectCpuProfile: (CpuUsageProfile) -> Unit,
     onSelectTurn: (String) -> Unit,
+    onToggleFairPlayAuditor: (Boolean) -> Unit = {},
+    onToggleHumanizer: (Boolean) -> Unit = {},
+    onSelectTargetElo: (Int) -> Unit = {},
+    onClearSessionTelemetry: () -> Unit = {},
     onTogglePracticeAutoPlay: (Boolean) -> Unit,
     onChangePracticeDelay: (Int) -> Unit,
     onSelectPreset: (BrowserSitePreset) -> Unit,
@@ -213,6 +220,7 @@ fun ChessForgeScreen(
                     BrowserWorkspaceTab(
                         activeUrl = activeUrl,
                         reloadNonce = reloadNonce,
+                        telemetryResetNonce = telemetryResetNonce,
                         extensionConfig = extensionConfig,
                         engineStatus = engineStatus,
                         liveAnalysis = liveAnalysis,
@@ -232,6 +240,8 @@ fun ChessForgeScreen(
                         config = extensionConfig,
                         engineStatus = engineStatus,
                         engineBackend = liveAnalysis.engineBackend,
+                        fairPlayStatus = liveAnalysis.fairPlayStatus,
+                        telemetryStatusMessage = telemetryStatusMessage,
                         onSelectCpuProfile = onSelectCpuProfile,
                         onSelectDepth = onSelectDepth,
                         onSelectSkillLevel = onSelectSkillLevel,
@@ -245,6 +255,10 @@ fun ChessForgeScreen(
                         onToggleAutoAdaptTheme = onToggleAutoAdaptTheme,
                         onToggleHud = onToggleHud,
                         onSelectTurn = onSelectTurn,
+                        onToggleFairPlayAuditor = onToggleFairPlayAuditor,
+                        onToggleHumanizer = onToggleHumanizer,
+                        onSelectTargetElo = onSelectTargetElo,
+                        onClearSessionTelemetry = onClearSessionTelemetry,
                         onTogglePracticeAutoPlay = onTogglePracticeAutoPlay,
                         onChangePracticeDelay = onChangePracticeDelay
                     )
@@ -437,6 +451,12 @@ private fun ExtensionHubContent(
                 engineStatus = engineStatus,
                 assetsReady = assetsReady,
                 backendLabel = liveAnalysis.engineBackend
+            )
+
+            FairPlayStatusIndicator(
+                status = liveAnalysis.fairPlayStatus,
+                auditorEnabled = extensionConfig.fairPlayAuditorEnabled,
+                modifier = Modifier.fillMaxWidth()
             )
 
             // Live Horizontal Evaluation Bar + Active Config Summary
