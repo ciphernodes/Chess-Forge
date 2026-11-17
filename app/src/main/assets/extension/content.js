@@ -21,11 +21,14 @@
     showTablebase: true,
     autoAdaptTheme: true,
     evalBarOrientation: "vertical",
-    multiPv: 2,
+    multiPv: 4,
     maxDepth: 14,
     skillLevel: 20,
     cpuProfile: "balanced",
     turnOverride: "auto",
+    humanizerEnabled: true,
+    targetElo: 1500,
+    maxHintsPerGame: 3,
     practiceAutoPlay: false,
     practiceHumanDelayMs: 650
   };
@@ -35,6 +38,10 @@
   let lastGrid = null;
   let inferredTurn = "w";
   let lastAnalysis = null;
+  let lastPositionObservedAtMs = Date.now();
+  let humanizerDelayTimer = null;
+  let hintsUsedInGame = 0;
+  const shownHintFens = new Set();
   let prevAnalysisForAnnotation = null;
   let prevOpeningBookForAnnotation = null;
   let lastPlayedAnnotation = null; // { sq, uci, symbol, label, color, text, cpLoss, winPctLoss }
@@ -70,6 +77,7 @@
   let hudPill = null;
   let statusDotEl = null;
   let hudTextEl = null;
+  let fairPlayPill = null;
   let bookBannerEl = null;
   let tablebaseBannerEl = null;
   let fabPill = null;
@@ -88,7 +96,10 @@
       return;
     }
     try {
-      chrome.storage.local.get(DEFAULT_CONFIG, (stored) => {
+      chrome.storage.local.get(Object.assign({}, DEFAULT_CONFIG, { chessForgeFairPlayWindowV1: null }), (stored) => {
+        if (stored && stored.chessForgeFairPlayWindowV1 && Array.isArray(stored.chessForgeFairPlayWindowV1.games)) {
+          fairPlayState.windowGames = stored.chessForgeFairPlayWindowV1.games.slice(-20);
+        }
         config = Object.assign({}, DEFAULT_CONFIG, stored || {});
         cb();
       });
@@ -557,6 +568,12 @@
       runAnalysis(true);
     });
 
+    fairPlayPill = document.createElement("div");
+    fairPlayPill.style.cssText =
+      "position:fixed;left:10px;bottom:12px;display:none;align-items:center;gap:6px;padding:4px 10px;" +
+      "border-radius:999px;background:rgba(13,17,23,0.94);border:1.5px solid #10B981;color:#E6EDF3;" +
+      "font-size:10px;font-weight:800;box-shadow:0 4px 14px rgba(0,0,0,0.45);pointer-events:none;";
+
     fabPill.appendChild(toggleBtn);
     fabPill.appendChild(sideBtn);
     overlayHost.appendChild(svgLayer);
@@ -564,6 +581,7 @@
     overlayHost.appendChild(hudPill);
     overlayHost.appendChild(bookBannerEl);
     overlayHost.appendChild(tablebaseBannerEl);
+    overlayHost.appendChild(fairPlayPill);
     overlayHost.appendChild(fabPill);
     document.body.appendChild(overlayHost);
   }
@@ -1188,7 +1206,330 @@
     return enrichResult(fen, turn, raw);
   }
 
+  // --- HumanizerController & FairPlayAuditor Runtime Bridge ---
+  const FAIR_PLAY_KEY = "chessForgeFairPlayWindowV1";
+  const fairPlayState = {
+    windowGames: [],
+    currentMoves: [],
+    lockedOut: false,
+    lockoutReason: null,
+    lastSnapshot: {
+      riskLevel: "SAFE",
+      lockedOut: false,
+      lockoutReason: null,
+      baselineElo: 1500,
+      observedIpr: 1500,
+      sigmaIpr: 235,
+      zScore: 0,
+      currentGameMoves: 0,
+      currentGameSiSpikes: 0,
+      slidingWindowGames: 0,
+      acpl: 0,
+      stdcpl: 0,
+      meanPartialCredit: 0.59,
+      moveTimeMeanMs: 0,
+      moveTimeCv: 0.45,
+      sub15sMoves: 0,
+      sub15sAccuracy: 0,
+      warnings: []
+    }
+  };
+
+  function parseClockTextMs(raw) {
+    if (!raw) return null;
+    const clean = String(raw).replace(/\s+/g, "").trim();
+    if (!clean) return null;
+    const parts = clean.split(":");
+    if (parts.length === 3) {
+      const h = Number(parts[0]), m = Number(parts[1]), s = Number(parts[2]);
+      if ([h, m, s].some((n) => Number.isNaN(n) || n < 0)) return null;
+      return Math.round((h * 3600 + m * 60 + s) * 1000);
+    }
+    if (parts.length === 2) {
+      const m = Number(parts[0]), s = Number(parts[1]);
+      if (Number.isNaN(m) || Number.isNaN(s) || m < 0 || s < 0) return null;
+      return Math.round((m * 60 + s) * 1000);
+    }
+    const secOnly = Number(clean);
+    return !Number.isNaN(secOnly) && secOnly >= 0 ? Math.round(secOnly * 1000) : null;
+  }
+
+  function readActiveClockMs(turn) {
+    const selectors = turn === "b"
+      ? [".rclock-black .time", ".clock-black .clock-time-monospace", ".clock-component.clock-black", "[data-cy='clock-black']"]
+      : [".rclock-white .time", ".clock-white .clock-time-monospace", ".clock-component.clock-white", "[data-cy='clock-white']"];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (!el || !el.textContent) continue;
+      const ms = parseClockTextMs(el.textContent);
+      if (ms !== null) return ms;
+    }
+    return null;
+  }
+
+  function expectedScoreForLine(line) {
+    if (line && Array.isArray(line.wdl) && line.wdl.length === 3) {
+      const total = line.wdl[0] + line.wdl[1] + line.wdl[2];
+      if (total > 0) return (line.wdl[0] + 0.5 * line.wdl[1]) / total;
+    }
+    return 1 / (1 + Math.exp(-0.00368208 * scoreToComparableCp(line)));
+  }
+
+  function computeHeuristicPriors(fen, lines, targetElo) {
+    const map = new Map();
+    if (!lines || lines.length === 0) return map;
+    const bestEval = scoreToComparableCp(lines[0]);
+    const eloFactor = Math.max(0.2, Math.min(1.0, (targetElo - 500) / 2100));
+    const weights = lines.map((line, idx) => {
+      const cpDrop = Math.max(0, bestEval - scoreToComparableCp(line));
+      const destSq = (line.uci || "").slice(2, 4);
+      const isCapture = (line.san || "").includes("x");
+      const isCheck = (line.san || "").includes("+") || (line.san || "").includes("#");
+      const isCenter = /^(c|d|e|f)[3-6]$/.test(destSq);
+      let boost = 1.0;
+      if (isCapture) boost *= 1.35;
+      if (isCheck) boost *= 1.25;
+      if (isCenter) boost *= 1.15;
+      if (!isCapture && !isCheck && !isCenter && idx === 0 && cpDrop === 0) boost *= 0.72 + 0.28 * eloFactor;
+      return Math.max(1e-4, Math.exp(-cpDrop / (90 + (1 - eloFactor) * 140)) * Math.exp(-idx * (0.35 + eloFactor * 0.4)) * boost);
+    });
+    const sum = weights.reduce((a, b) => a + b, 0) || 1;
+    lines.forEach((l, i) => map.set(l.uci, weights[i] / sum));
+    return map;
+  }
+
+  function recomputeFairPlaySnapshot() {
+    const baselineElo = Math.max(400, Math.min(3000, parseInt(config.targetElo || 1500, 10)));
+    const cur = fairPlayState.currentMoves;
+    const win = fairPlayState.windowGames;
+    const winMoves = win.reduce((acc, g) => acc + (g.moveCount || 0), 0);
+    const totalMoves = winMoves + cur.length;
+
+    const meanArr = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+    const stdArr = (arr) => {
+      if (arr.length < 2) return 0;
+      const m = meanArr(arr);
+      return Math.sqrt(arr.reduce((a, v) => a + (v - m) * (v - m), 0) / arr.length);
+    };
+
+    const expectedCredit = 0.42 + Math.max(0, Math.min(1, (baselineElo - 600) / 2200)) * 0.4;
+    const expectedAcpl = 108 - Math.max(0, Math.min(1, (baselineElo - 600) / 2200)) * 86;
+
+    let combinedAcpl = expectedAcpl;
+    let combinedCredit = expectedCredit;
+    if (totalMoves > 0) {
+      const wAcpl = win.reduce((acc, g) => acc + (g.acpl || 0) * (g.moveCount || 0), 0);
+      const wCredit = win.reduce((acc, g) => acc + (g.meanPartialCredit || 0) * (g.moveCount || 0), 0);
+      combinedAcpl = (wAcpl + cur.reduce((a, m) => a + m.cpLoss, 0)) / totalMoves;
+      combinedCredit = (wCredit + cur.reduce((a, m) => a + m.partialCredit, 0)) / totalMoves;
+    }
+
+    const spikes = cur.filter((m) => m.isSiSpike).length;
+    const sampleWeight = totalMoves / (totalMoves + 6);
+    const observedIpr = Math.max(400, Math.min(3200,
+      baselineElo + sampleWeight * ((combinedCredit - expectedCredit) * 1450 + (expectedAcpl - combinedAcpl) * 5.2) + spikes * 95
+    ));
+    const sigmaIpr = Math.max(42, 235 / Math.sqrt(Math.max(1, totalMoves)));
+    const zScore = (observedIpr - baselineElo) / sigmaIpr;
+
+    const times = cur.map((m) => m.elapsedMs);
+    const moveTimeMeanMs = meanArr(times);
+    const moveTimeCv = times.length >= 3 && moveTimeMeanMs > 0 ? stdArr(times) / moveTimeMeanMs : 0.45;
+    const sub15 = cur.filter((m) => m.remainingClockMs !== null && m.remainingClockMs < 15000);
+    const sub15Acc = sub15.length ? meanArr(sub15.map((m) => m.partialCredit)) : 0;
+
+    const warnings = [];
+    const now = Date.now();
+    if (spikes >= 2) {
+      warnings.push({ code: "LOCKOUT_SPIKE_LIMIT", severity: "CRITICAL", message: `${spikes} rapid critical S_i spikes in one game`, timestampMs: now });
+    } else if (spikes === 1) {
+      warnings.push({ code: "RAPID_CRITICAL_MATCH", severity: "WARN", message: "1 rapid critical S_i match detected", timestampMs: now });
+    }
+    if (times.length >= 6 && moveTimeCv < 0.2) {
+      warnings.push({ code: "FLAT_MOVE_CADENCE", severity: "WARN", message: `Flat cadence CV (${moveTimeCv.toFixed(2)})`, timestampMs: now });
+    }
+    if (sub15.length >= 3 && sub15Acc >= 0.88) {
+      warnings.push({ code: "SUB_15S_ENGINE_PRECISION", severity: "CRITICAL", message: `High <15s precision (${Math.round(sub15Acc * 100)}%)`, timestampMs: now });
+    }
+    if (zScore >= 2.5) {
+      warnings.push({ code: "CRITICAL_IPR_ZSCORE", severity: "CRITICAL", message: `IPR Z=${zScore.toFixed(2)} >= 2.5σ`, timestampMs: now });
+    } else if (zScore >= 1.8) {
+      warnings.push({ code: "ELEVATED_IPR_ZSCORE", severity: "WARN", message: `Elevated IPR Z=${zScore.toFixed(2)}`, timestampMs: now });
+    }
+
+    if (spikes >= 2 || zScore >= 2.5) {
+      fairPlayState.lockedOut = true;
+      fairPlayState.lockoutReason = spikes >= 2 ? `Lockout: ${spikes} S_i critical spikes` : `Lockout: Z=${zScore.toFixed(2)} >= 2.5`;
+    }
+
+    const riskLevel = fairPlayState.lockedOut ? "LOCKOUT" : (zScore >= 1.8 || (spikes >= 1 && zScore >= 1.25)) ? "ELEVATED" : "SAFE";
+    fairPlayState.lastSnapshot = {
+      riskLevel,
+      lockedOut: fairPlayState.lockedOut,
+      lockoutReason: fairPlayState.lockoutReason,
+      baselineElo,
+      observedIpr: Math.round(observedIpr),
+      sigmaIpr: Number(sigmaIpr.toFixed(1)),
+      zScore: Number(zScore.toFixed(2)),
+      currentGameMoves: cur.length,
+      currentGameSiSpikes: spikes,
+      slidingWindowGames: win.length,
+      acpl: Number(combinedAcpl.toFixed(1)),
+      stdcpl: Number(stdArr(cur.map((m) => m.cpLoss)).toFixed(1)),
+      meanPartialCredit: Number(combinedCredit.toFixed(3)),
+      moveTimeMeanMs: Math.round(moveTimeMeanMs),
+      moveTimeCv: Number(moveTimeCv.toFixed(3)),
+      sub15sMoves: sub15.length,
+      sub15sAccuracy: Number(sub15Acc.toFixed(3)),
+      warnings
+    };
+    renderFairPlayPill();
+    return fairPlayState.lastSnapshot;
+  }
+
+  function recordCompletedMoveForAuditor(prevAnalysis, playedMove, turnAfterMove) {
+    if (!prevAnalysis || !prevAnalysis.result || !Array.isArray(prevAnalysis.result.lines) || prevAnalysis.result.lines.length === 0 || !playedMove || !playedMove.uci) return;
+    const lines = prevAnalysis.result.lines;
+    const top = lines[0];
+    const played4 = playedMove.uci.slice(0, 4);
+    const matched = lines.find((l) => (l.uci || "").slice(0, 4) === played4) || null;
+    const bestCp = scoreToComparableCp(top);
+    const cpLoss = matched ? Math.max(0, bestCp - scoreToComparableCp(matched)) : Math.min(600, Math.max(40, bestCp - scoreToComparableCp(lines[lines.length - 1])) + 85);
+    const wdlLoss = matched ? Math.max(0, expectedScoreForLine(top) - expectedScoreForLine(matched)) : 0.14;
+    const matchedTop = played4 === (top.uci || "").slice(0, 4);
+    const partialCredit = matchedTop ? 1.0 : Math.max(0, Math.min(1, 0.5 * Math.exp(-cpLoss / 70) + 0.5 * Math.max(0, 1 - wdlLoss * 2.1)));
+
+    const priors = computeHeuristicPriors(prevAnalysis.fen, lines, config.targetElo || 1500);
+    const humanPrior = priors.get(matched ? matched.uci : playedMove.uci) ?? 0.05;
+    const elapsedMs = Math.max(250, Date.now() - lastPositionObservedAtMs);
+    const remainingClockMs = readActiveClockMs(prevAnalysis.turn || (turnAfterMove === "w" ? "b" : "w"));
+
+    const deltaE = lines.length >= 2 ? Math.max(0, expectedScoreForLine(lines[0]) - expectedScoreForLine(lines[1])) : 0;
+    const shallow = prevAnalysis.result.shallowDepth6;
+    const shallowDisagrees = shallow && shallow.bestUci && shallow.bestUci.slice(0, 4) !== (top.uci || "").slice(0, 4);
+    const isCriticalTrap = (prevAnalysis.result.depth || 0) >= 14 && ((shallowDisagrees && deltaE >= 0.15) || deltaE >= 0.22);
+    const matchedDeepOnlyWin = isCriticalTrap && matchedTop;
+    const expectedHumanMs = Math.max(3800, 9200 - ((config.targetElo || 1500) - 1000) * 1.6);
+    const siScore = matchedDeepOnlyWin ? (expectedHumanMs / elapsedMs) * (0.45 + 1.45 * (1 - Math.min(0.92, humanPrior))) : 0;
+    const isSiSpike = matchedDeepOnlyWin && humanPrior <= 0.28 && elapsedMs <= expectedHumanMs * 0.55 && siScore >= 2.0;
+
+    fairPlayState.currentMoves.push({ cpLoss, wdlLoss, partialCredit, humanPrior, elapsedMs, remainingClockMs, isSiSpike });
+    recomputeFairPlaySnapshot();
+  }
+
+  function renderFairPlayPill() {
+    if (!fairPlayPill) return;
+    const snap = fairPlayState.lastSnapshot;
+    if (!config.humanizerEnabled && snap.riskLevel === "SAFE") {
+      fairPlayPill.style.display = "none";
+      return;
+    }
+    const palette = snap.riskLevel === "LOCKOUT"
+      ? { border: "#EF4444", text: "#FCA5A5", label: `LOCKOUT • Z=${snap.zScore.toFixed(1)}σ` }
+      : snap.riskLevel === "ELEVATED"
+      ? { border: "#F59E0B", text: "#FDE68A", label: `ELEVATED • Z=${snap.zScore.toFixed(1)}σ` }
+      : { border: "#10B981", text: "#A7F3D0", label: `FairPlay: SAFE • ${hintsUsedInGame}/${config.maxHintsPerGame || 3}` };
+    fairPlayPill.style.display = "flex";
+    fairPlayPill.style.borderColor = palette.border;
+    fairPlayPill.style.color = palette.text;
+    fairPlayPill.textContent = palette.label;
+  }
+
+  function evaluateHumanizerDecision(fen, turn, result) {
+    const snap = recomputeFairPlaySnapshot();
+    if (snap.lockedOut) {
+      return { allow: false, reason: "LOCKOUT", delayMs: 0, result };
+    }
+    if (!config.humanizerEnabled) {
+      return { allow: true, reason: "HUMANIZER_OFF", delayMs: 0, result };
+    }
+    const lines = result.lines || [];
+    if (lines.length === 0) return { allow: false, reason: "NO_LINES", delayMs: 0, result };
+
+    // Suppress on opening book, simplified endgames (<= 6 pieces), or forced recaptures
+    const pieceCount = ((fen.split(" ")[0] || "").match(/[a-zA-Z]/g) || []).length;
+    if (pieceCount <= 6) return { allow: false, reason: "SIMPLIFIED_ENDGAME", delayMs: 0, result };
+
+    if (lastOpeningBook && Array.isArray(lastOpeningBook.moves) && lastOpeningBook.moves.some((m) => (m.uci || "").slice(0, 4) === (lines[0].uci || "").slice(0, 4))) {
+      return { allow: false, reason: "OPENING_BOOK", delayMs: 0, result };
+    }
+
+    if (lines.length >= 2 && (scoreToComparableCp(lines[0]) - scoreToComparableCp(lines[1])) >= 150 && (lines[0].san || "").includes("x")) {
+      return { allow: false, reason: "FORCED_RECAPTURE", delayMs: 0, result };
+    }
+
+    const maxHints = Math.max(1, parseInt(config.maxHintsPerGame || 3, 10));
+    if (!shownHintFens.has(fen) && hintsUsedInGame >= maxHints) {
+      return { allow: false, reason: "HINT_BUDGET_EXHAUSTED", delayMs: 0, result };
+    }
+
+    const deltaE = lines.length >= 2 ? Math.max(0, expectedScoreForLine(lines[0]) - expectedScoreForLine(lines[1])) : 0.5;
+    const criticalThreshold = 0.14 + (snap.riskLevel === "ELEVATED" ? 0.08 : 0);
+    if (deltaE < criticalThreshold) {
+      return { allow: false, reason: "LOW_CRITICALITY_WDL", delayMs: 0, result };
+    }
+
+    const clockMs = readActiveClockMs(turn);
+    if (clockMs !== null) {
+      if (clockMs < 15000) return { allow: false, reason: "LOW_CLOCK_CUTOFF", delayMs: 0, result };
+      if (clockMs < 25000) {
+        const p = (clockMs - 15000) / 10000;
+        const prob = p * p * (3 - 2 * p);
+        if (Math.random() > prob) return { allow: false, reason: "LOW_CLOCK_TAPER", delayMs: 0, result };
+      }
+    }
+
+    const targetElo = Math.max(400, Math.min(3000, parseInt(config.targetElo || 1500, 10)));
+    const priors = computeHeuristicPriors(fen, lines, targetElo);
+    const bestCp = scoreToComparableCp(lines[0]);
+    const lambda = 0.004 + ((Math.max(600, Math.min(2800, targetElo)) - 600) / 2200) * 0.028;
+    const baseTemp = 1.35 - ((Math.max(600, Math.min(2800, targetElo)) - 600) / 2200) * 0.95;
+    const temp = baseTemp * (snap.riskLevel === "ELEVATED" ? 2.0 : 1.0);
+
+    const survivors = lines.filter((l) => (bestCp - scoreToComparableCp(l)) <= 160 && (priors.get(l.uci) || 0) >= 0.03);
+    if (survivors.length === 0) return { allow: false, reason: "NO_PLAUSIBLE_HUMAN", delayMs: 0, result };
+
+    const utils = survivors.map((l) => (Math.log(Math.max(1e-5, priors.get(l.uci) || 0.03)) - lambda * Math.max(0, bestCp - scoreToComparableCp(l))) / Math.max(0.08, temp));
+    const maxU = Math.max(...utils);
+    const exps = utils.map((u) => Math.exp(u - maxU));
+    const sumExp = exps.reduce((a, b) => a + b, 0) || 1;
+    let roll = Math.random(), cum = 0, chosen = survivors[0];
+    for (let i = 0; i < survivors.length; i++) {
+      cum += exps[i] / sumExp;
+      if (roll <= cum) { chosen = survivors[i]; break; }
+    }
+
+    const reorderedLines = [chosen, ...lines.filter((l) => l.uci !== chosen.uci)];
+    const shallow = result.shallowDepth6;
+    const sharpDivergence = shallow && shallow.bestUci && shallow.bestUci.slice(0, 4) !== (lines[0].uci || "").slice(0, 4) ? 0.7 : 0;
+    const complexity = Math.max(0, Math.min(1, 0.45 * Math.min(1, deltaE / 0.35) + 0.35 * sharpDivergence + 0.2 * Math.min(1, lines.length / 4)));
+    const minD = 800 + complexity * (4000 - 800);
+    const maxD = 1500 + complexity * (9500 - 1500);
+    const delayMs = Math.max(snap.riskLevel === "ELEVATED" ? 1200 : 0, Math.round(minD + Math.random() * (maxD - minD)));
+
+    return {
+      allow: true,
+      reason: "OK",
+      delayMs,
+      result: Object.assign({}, result, { lines: reorderedLines })
+    };
+  }
+
+  window.__ChessForgeHumanizer = {
+    getSnapshot: () => fairPlayState.lastSnapshot,
+    resetGame: () => {
+      hintsUsedInGame = 0;
+      shownHintFens.clear();
+      fairPlayState.currentMoves = [];
+      recomputeFairPlaySnapshot();
+    }
+  };
+
   function publishResult(boardInfo, turn, result, playedMove) {
+    if (humanizerDelayTimer) {
+      clearTimeout(humanizerDelayTimer);
+      humanizerDelayTimer = null;
+    }
     if (lastAnalysis && lastAnalysis.fen !== result.fen) {
       prevAnalysisForAnnotation = lastAnalysis;
       lastPlayedAnnotation = evaluatePlayedMoveAnnotation(
@@ -1199,14 +1540,40 @@
         result.lines,
         playedMove
       );
+      recordCompletedMoveForAuditor(prevAnalysisForAnnotation, playedMove, turn);
     }
 
     lastAnalysis = { fen: result.fen, turn, result };
     lastBoardTheme = detectBoardTheme(boardInfo);
     setStatus("IDLE");
-    renderOverlay(boardInfo, result, turn);
 
-    const payload = Object.assign({}, result, {
+    const decision = evaluateHumanizerDecision(result.fen, turn, result);
+    const snapshot = fairPlayState.lastSnapshot;
+    const activeResult = decision.result || result;
+
+    if (!decision.allow) {
+      clearOverlayVisuals();
+      renderFairPlayPill();
+    } else if (decision.delayMs > 0) {
+      clearOverlayVisuals();
+      renderFairPlayPill();
+      const scheduledFen = result.fen;
+      humanizerDelayTimer = setTimeout(() => {
+        humanizerDelayTimer = null;
+        if (!lastAnalysis || lastAnalysis.fen !== scheduledFen || fairPlayState.lockedOut) return;
+        if (!shownHintFens.has(scheduledFen)) {
+          shownHintFens.add(scheduledFen);
+          hintsUsedInGame++;
+          renderFairPlayPill();
+        }
+        const liveBoard = readActiveBoard();
+        if (liveBoard) renderOverlay(liveBoard, activeResult, turn);
+      }, decision.delayMs);
+    } else {
+      renderOverlay(boardInfo, activeResult, turn);
+    }
+
+    const payload = Object.assign({}, activeResult, {
       status: "IDLE",
       boardTheme: {
         name: lastBoardTheme.name,
@@ -1216,7 +1583,9 @@
       },
       lastMoveAnnotation: lastPlayedAnnotation,
       openingBook: lastOpeningBook,
-      tablebase: lastTablebase
+      tablebase: lastTablebase,
+      fairPlay: snapshot,
+      humanizerSuppression: decision.allow ? null : decision.reason
     });
 
     if (typeof window.ChessForgeAndroidBridge !== "undefined" &&
@@ -1252,8 +1621,9 @@
 
   function runAnalysis(force) {
     ensureOverlayUi();
-    if (!config.enabled) {
+    if (!config.enabled || fairPlayState.lockedOut) {
       clearOverlayVisuals();
+      renderFairPlayPill();
       return;
     }
     const boardInfo = readActiveBoard();
@@ -1296,6 +1666,11 @@
 
     if (lastPlacement && placement !== lastPlacement) {
       prevOpeningBookForAnnotation = lastOpeningBook;
+      if (humanizerDelayTimer) {
+        clearTimeout(humanizerDelayTimer);
+        humanizerDelayTimer = null;
+      }
+      lastPositionObservedAtMs = Date.now();
     }
 
     lastPlacement = placement;
@@ -1397,7 +1772,8 @@
         sendResponse({
           config,
           engineStatus,
-          lastAnalysis: lastAnalysis ? Object.assign({}, lastAnalysis.result, { openingBook: lastOpeningBook, tablebase: lastTablebase, boardTheme: lastBoardTheme }) : null
+          fairPlay: fairPlayState.lastSnapshot,
+          lastAnalysis: lastAnalysis ? Object.assign({}, lastAnalysis.result, { openingBook: lastOpeningBook, tablebase: lastTablebase, boardTheme: lastBoardTheme, fairPlay: fairPlayState.lastSnapshot }) : null
         });
       } else if (msg.type === "UPDATE_CONFIG") {
         config = Object.assign({}, config, msg.config || {});

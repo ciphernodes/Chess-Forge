@@ -51,6 +51,14 @@
       </div>
     </section>
 
+    <section class="card" id="fairplay-card">
+      <div class="card-title">
+        <span>FairPlay Auditor</span>
+        <span id="fairplay-badge" class="pill-tag">SAFE • 1500 IPR</span>
+      </div>
+      <div id="fairplay-summary" class="muted">Z=0.00σ • 0 S_i spikes • 0/20 window games</div>
+    </section>
+
     <section class="card">
       <div class="card-title">
         <span id="backend-label">Stockfish 19 Analysis</span>
@@ -92,9 +100,25 @@
         <label for="select-multipv">Lines (MultiPV)</label>
         <select id="select-multipv">
           <option value="1">Top 1</option>
-          <option value="2" selected>Top 2</option>
+          <option value="2">Top 2</option>
           <option value="3">Top 3</option>
+          <option value="4" selected>Top 4 (Humanizer)</option>
         </select>
+      </div>
+      <div class="row">
+        <label for="select-elo">Target Rating (Elo)</label>
+        <select id="select-elo">
+          <option value="1000">1000 Elo</option>
+          <option value="1300">1300 Elo</option>
+          <option value="1500" selected>1500 Elo</option>
+          <option value="1800">1800 Elo</option>
+          <option value="2100">2100 Elo</option>
+          <option value="2400">2400 Elo</option>
+        </select>
+      </div>
+      <div class="row">
+        <label for="toggle-humanizer">Humanizer Gate & Delay</label>
+        <input type="checkbox" id="toggle-humanizer" checked />
       </div>
       <div class="row">
         <label for="select-turn">Side to Move</label>

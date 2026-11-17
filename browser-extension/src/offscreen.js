@@ -67,7 +67,10 @@
 
           if (line === "uciok") {
             worker.postMessage("setoption name UCI_AnalyseMode value true");
+            worker.postMessage("setoption name UCI_ShowWDL value true");
+            worker.postMessage("setoption name MultiPV value 4");
             worker.postMessage("setoption name Move Overhead value 10");
+            lastAppliedOptions.multiPv = 4;
             worker.postMessage("isready");
             return;
           }
@@ -116,6 +119,7 @@
     const selMatch = line.match(/\bseldepth\s+(\d+)\b/);
     const nodesMatch = line.match(/\bnodes\s+(\d+)\b/);
     const npsMatch = line.match(/\bnps\s+(\d+)\b/);
+    const wdlMatch = line.match(/\bwdl\s+(\d+)\s+(\d+)\s+(\d+)\b/);
 
     const rank = mpMatch ? parseInt(mpMatch[1], 10) : 1;
     const scoreType = scoreMatch[1];
@@ -128,6 +132,9 @@
     const centipawns = isMate ? null : scoreVal;
     const mate = isMate ? scoreVal : null;
     const winPct = isMate ? (scoreVal > 0 ? 99.9 : 0.1) : cpToWinPct(scoreVal);
+    const wdl = wdlMatch
+      ? [parseInt(wdlMatch[1], 10), parseInt(wdlMatch[2], 10), parseInt(wdlMatch[3], 10)]
+      : null;
 
     return {
       rank,
@@ -136,6 +143,7 @@
       centipawns,
       mate,
       winPct,
+      wdl,
       depth: depthMatch ? parseInt(depthMatch[1], 10) : 0,
       selDepth: selMatch ? parseInt(selMatch[1], 10) : 0,
       nodes: nodesMatch ? parseInt(nodesMatch[1], 10) : 0,
@@ -151,6 +159,15 @@
       const parsed = parseInfoLine(line);
       if (parsed) {
         currentSearch.linesByRank.set(parsed.rank, parsed);
+        if (parsed.rank === 1 && parsed.depth > 0 && parsed.depth <= 6) {
+          currentSearch.shallowDepth6 = {
+            depth: parsed.depth,
+            bestUci: parsed.uci,
+            centipawns: parsed.centipawns,
+            mate: parsed.mate,
+            wdl: parsed.wdl
+          };
+        }
         if (parsed.depth > currentSearch.maxDepthSeen) {
           currentSearch.maxDepthSeen = parsed.depth;
         }
@@ -180,6 +197,7 @@
           centipawns: 0,
           mate: null,
           winPct: 50.0,
+          wdl: [250, 500, 250],
           depth: finished.maxDepthSeen || 1,
           selDepth: 0,
           nodes: finished.nodes,
@@ -192,6 +210,7 @@
       finished.resolve({
         fen: finished.fen,
         lines,
+        shallowDepth6: finished.shallowDepth6 || null,
         depth: finished.maxDepthSeen || 1,
         nodes: finished.nodes,
         elapsedMs: Date.now() - finished.startTime,
@@ -221,7 +240,7 @@
       return;
     }
 
-    const multiPv = Math.max(1, Math.min(3, parseInt(config.multiPv || 2, 10)));
+    const multiPv = Math.max(1, Math.min(4, parseInt(config.multiPv || 4, 10)));
     const skillLevel = Math.max(0, Math.min(20, parseInt(config.skillLevel ?? 20, 10)));
     const budget = profileBudget(config.cpuProfile || "balanced", parseInt(config.maxDepth || 14, 10));
 
@@ -246,6 +265,7 @@
       startTime: Date.now(),
       maxDepthSeen: 0,
       nodes: 0,
+      shallowDepth6: null,
       linesByRank: new Map(),
       resolve,
       reject,

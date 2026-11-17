@@ -14,6 +14,8 @@
   const elTbHeader = document.getElementById("tb-header");
   const elTbMoves = document.getElementById("tb-moves");
   const elLastMoveBadge = document.getElementById("last-move-badge");
+  const elFairPlayBadge = document.getElementById("fairplay-badge");
+  const elFairPlaySummary = document.getElementById("fairplay-summary");
 
   function annotationColors(symbol) {
     switch (symbol) {
@@ -37,6 +39,8 @@
   const elSkill = document.getElementById("range-skill");
   const elSkillVal = document.getElementById("skill-val");
   const elMultiPv = document.getElementById("select-multipv");
+  const elElo = document.getElementById("select-elo");
+  const elHumanizer = document.getElementById("toggle-humanizer");
   const elTurn = document.getElementById("select-turn");
   const elEvalBar = document.getElementById("toggle-evalbar");
   const elArrows = document.getElementById("toggle-arrows");
@@ -54,7 +58,9 @@
     cpuProfile: "balanced",
     maxDepth: 14,
     skillLevel: 20,
-    multiPv: 2,
+    multiPv: 4,
+    targetElo: 1500,
+    humanizerEnabled: true,
     turnOverride: "auto",
     showEvalBar: true,
     showArrows: true,
@@ -159,6 +165,17 @@
     }
   }
 
+  function renderFairPlay(fp) {
+    if (!elFairPlayBadge || !elFairPlaySummary || !fp) return;
+    const risk = fp.riskLevel || "SAFE";
+    const color = risk === "LOCKOUT" ? "#EF4444" : risk === "ELEVATED" ? "#F59E0B" : "#10B981";
+    elFairPlayBadge.textContent = `${risk} • ${fp.observedIpr || 1500} IPR`;
+    elFairPlayBadge.style.borderColor = color;
+    elFairPlayBadge.style.color = color;
+    const warnText = fp.warnings && fp.warnings.length > 0 ? ` • ${fp.warnings[0].message}` : "";
+    elFairPlaySummary.textContent = `Z=${(fp.zScore || 0).toFixed(2)}σ • ${fp.currentGameSiSpikes || 0} S_i spikes • ACPL ${fp.acpl || 0}${warnText}`;
+  }
+
   function renderResult(result) {
     if (!result || !result.lines || result.lines.length === 0) {
       elLines.innerHTML = '<p class="muted">No active Lichess/Chess.com board detected on current tab.</p>';
@@ -171,6 +188,7 @@
       elThemeBadge.textContent = `Theme: ${result.boardTheme.name}`;
     }
 
+    renderFairPlay(result.fairPlay);
     renderOpeningBook(result.openingBook);
     renderTablebase(result.tablebase);
 
@@ -252,7 +270,9 @@
     elDepth.value = String(data.maxDepth || 14);
     elSkill.value = String(data.skillLevel ?? 20);
     elSkillVal.textContent = elSkill.value;
-    elMultiPv.value = String(data.multiPv || 2);
+    elMultiPv.value = String(data.multiPv || 4);
+    if (elElo) elElo.value = String(data.targetElo || 1500);
+    if (elHumanizer) elHumanizer.checked = data.humanizerEnabled !== false;
     elTurn.value = data.turnOverride || "auto";
     elEvalBar.checked = data.showEvalBar !== false;
     elArrows.checked = data.showArrows !== false;
@@ -272,6 +292,7 @@
       chrome.tabs.sendMessage(tabs[0].id, { type: "GET_STATE" }, (resp) => {
         if (chrome.runtime.lastError) return;
         if (resp && resp.engineStatus) renderStatus(resp.engineStatus);
+        if (resp && resp.fairPlay) renderFairPlay(resp.fairPlay);
         if (resp && resp.lastAnalysis) renderResult(resp.lastAnalysis);
       });
     });
@@ -285,6 +306,8 @@
   });
   elSkill.addEventListener("change", () => pushConfigToActiveTab({ skillLevel: parseInt(elSkill.value, 10) }));
   elMultiPv.addEventListener("change", () => pushConfigToActiveTab({ multiPv: parseInt(elMultiPv.value, 10) }));
+  if (elElo) elElo.addEventListener("change", () => pushConfigToActiveTab({ targetElo: parseInt(elElo.value, 10) }));
+  if (elHumanizer) elHumanizer.addEventListener("change", () => pushConfigToActiveTab({ humanizerEnabled: elHumanizer.checked }));
   elTurn.addEventListener("change", () => pushConfigToActiveTab({ turnOverride: elTurn.value }));
   elEvalBar.addEventListener("change", () => pushConfigToActiveTab({ showEvalBar: elEvalBar.checked }));
   elArrows.addEventListener("change", () => pushConfigToActiveTab({ showArrows: elArrows.checked }));
