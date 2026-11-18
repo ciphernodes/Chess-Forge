@@ -89,6 +89,8 @@ class MainActivity : ComponentActivity() {
                     onToggleHumanizer = viewModel::setHumanizerEnabled,
                     onSelectTargetElo = viewModel::setTargetElo,
                     onClearSessionTelemetry = viewModel::clearSessionTelemetry,
+                    onToggleAutonomousMode = viewModel::setAutonomousMode,
+                    onSelectAutonomousEloProfile = viewModel::setAutonomousEloProfile,
                     onTogglePracticeAutoPlay = viewModel::setPracticeAutoPlay,
                     onChangePracticeDelay = viewModel::setPracticeHumanDelayMs,
                     onSelectPreset = viewModel::selectPreset,

@@ -73,6 +73,26 @@ data class FairPlayStatus(
     val warnings: List<String> = emptyList()
 )
 
+enum class AutonomousEloProfile(
+    val elo: Int,
+    val label: String,
+    val title: String,
+    val subtitle: String,
+    val blunderCapCp: Int,
+    val baseTemp: Float,
+    val depth: Int
+) {
+    ELO_1200(1200, "1200", "1200 Elo", "Club Novice", 165, 1.08f, 14),
+    ELO_1600(1600, "1600", "1600 Elo", "Intermediate", 105, 0.78f, 16),
+    ELO_2000(2000, "2000", "2000 Elo", "Expert Candidate", 60, 0.50f, 18);
+
+    companion object {
+        fun fromElo(elo: Int): AutonomousEloProfile {
+            return entries.firstOrNull { it.elo == elo } ?: ELO_1600
+        }
+    }
+}
+
 data class BrowserExtensionConfig(
     val enabled: Boolean = true,
     val showArrows: Boolean = true,
@@ -93,13 +113,16 @@ data class BrowserExtensionConfig(
     val targetElo: Int = 1500,
     val maxHintsPerGame: Int = 3,
     val practiceAutoPlay: Boolean = false,
-    val practiceHumanDelayMs: Int = 650
+    val practiceHumanDelayMs: Int = 650,
+    val autonomousMode: Boolean = false,
+    val autonomousEloProfile: Int = 1600
 ) {
     fun toJsObjectLiteral(): String {
         val safeTurn = when (turnOverride) {
             "w", "b" -> turnOverride
             else -> "auto"
         }
+        val safeEloProfile = if (autonomousEloProfile in listOf(1200, 1600, 2000)) autonomousEloProfile else 1600
         return "{" +
             "enabled:$enabled," +
             "showArrows:$showArrows," +
@@ -120,7 +143,9 @@ data class BrowserExtensionConfig(
             "targetElo:${targetElo.coerceIn(400, 3000)}," +
             "maxHintsPerGame:${maxHintsPerGame.coerceIn(1, 5)}," +
             "practiceAutoPlay:$practiceAutoPlay," +
-            "practiceHumanDelayMs:${practiceHumanDelayMs.coerceIn(250, 2500)}" +
+            "practiceHumanDelayMs:${practiceHumanDelayMs.coerceIn(250, 2500)}," +
+            "autonomousMode:$autonomousMode," +
+            "autonomousEloProfile:$safeEloProfile" +
             "}"
     }
 }

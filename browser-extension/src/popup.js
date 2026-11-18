@@ -41,6 +41,8 @@
   const elMultiPv = document.getElementById("select-multipv");
   const elElo = document.getElementById("select-elo");
   const elHumanizer = document.getElementById("toggle-humanizer");
+  const elAutonomous = document.getElementById("toggle-autonomous");
+  const elAutonomousElo = document.getElementById("select-autonomous-elo");
   const elFairPlayToggle = document.getElementById("toggle-fairplay");
   const elClearTelemetry = document.getElementById("btn-clear-telemetry");
   const elTurn = document.getElementById("select-turn");
@@ -71,7 +73,9 @@
     showOpeningBook: true,
     showTablebase: true,
     autoAdaptTheme: true,
-    showHud: true
+    showHud: true,
+    autonomousMode: false,
+    autonomousEloProfile: 1600
   };
 
   function renderStatus(status, backend) {
@@ -276,6 +280,8 @@
     elMultiPv.value = String(data.multiPv || 4);
     if (elElo) elElo.value = String(data.targetElo || 1500);
     if (elHumanizer) elHumanizer.checked = data.humanizerEnabled !== false;
+    if (elAutonomous) elAutonomous.checked = data.autonomousMode === true;
+    if (elAutonomousElo) elAutonomousElo.value = String(data.autonomousEloProfile || 1600);
     if (elFairPlayToggle) elFairPlayToggle.checked = data.fairPlayAuditorEnabled !== false;
     elTurn.value = data.turnOverride || "auto";
     elEvalBar.checked = data.showEvalBar !== false;
@@ -312,6 +318,8 @@
   elMultiPv.addEventListener("change", () => pushConfigToActiveTab({ multiPv: parseInt(elMultiPv.value, 10) }));
   if (elElo) elElo.addEventListener("change", () => pushConfigToActiveTab({ targetElo: parseInt(elElo.value, 10) }));
   if (elHumanizer) elHumanizer.addEventListener("change", () => pushConfigToActiveTab({ humanizerEnabled: elHumanizer.checked }));
+  if (elAutonomous) elAutonomous.addEventListener("change", () => pushConfigToActiveTab({ autonomousMode: elAutonomous.checked }));
+  if (elAutonomousElo) elAutonomousElo.addEventListener("change", () => pushConfigToActiveTab({ autonomousEloProfile: parseInt(elAutonomousElo.value, 10) }));
   if (elFairPlayToggle) elFairPlayToggle.addEventListener("change", () => pushConfigToActiveTab({ fairPlayAuditorEnabled: elFairPlayToggle.checked }));
   if (elClearTelemetry) {
     elClearTelemetry.addEventListener("click", () => {

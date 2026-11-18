@@ -52,7 +52,11 @@ class PreferencesRepository(private val context: Context) {
             targetElo = (prefs[KEY_TARGET_ELO] ?: 1500).coerceIn(400, 3000),
             maxHintsPerGame = (prefs[KEY_MAX_HINTS] ?: 3).coerceIn(1, 5),
             practiceAutoPlay = prefs[KEY_PRACTICE_AUTO] ?: false,
-            practiceHumanDelayMs = (prefs[KEY_PRACTICE_DELAY] ?: 650).coerceIn(250, 2500)
+            practiceHumanDelayMs = (prefs[KEY_PRACTICE_DELAY] ?: 650).coerceIn(250, 2500),
+            autonomousMode = prefs[KEY_AUTONOMOUS_MODE] ?: false,
+            autonomousEloProfile = (prefs[KEY_AUTONOMOUS_ELO_PROFILE] ?: 1600).let {
+                if (it in listOf(1200, 1600, 2000)) it else 1600
+            }
         )
     }
 
@@ -78,6 +82,20 @@ class PreferencesRepository(private val context: Context) {
             prefs[KEY_MAX_HINTS] = config.maxHintsPerGame.coerceIn(1, 5)
             prefs[KEY_PRACTICE_AUTO] = config.practiceAutoPlay
             prefs[KEY_PRACTICE_DELAY] = config.practiceHumanDelayMs.coerceIn(250, 2500)
+            prefs[KEY_AUTONOMOUS_MODE] = config.autonomousMode
+            prefs[KEY_AUTONOMOUS_ELO_PROFILE] = if (config.autonomousEloProfile in listOf(1200, 1600, 2000)) config.autonomousEloProfile else 1600
+        }
+    }
+
+    suspend fun setAutonomousMode(enabled: Boolean) {
+        context.chessForgeDataStore.edit { prefs ->
+            prefs[KEY_AUTONOMOUS_MODE] = enabled
+        }
+    }
+
+    suspend fun setAutonomousEloProfile(elo: Int) {
+        context.chessForgeDataStore.edit { prefs ->
+            prefs[KEY_AUTONOMOUS_ELO_PROFILE] = if (elo in listOf(1200, 1600, 2000)) elo else 1600
         }
     }
 
@@ -110,6 +128,8 @@ class PreferencesRepository(private val context: Context) {
         private val KEY_MAX_HINTS = intPreferencesKey("ext_max_hints")
         private val KEY_PRACTICE_AUTO = booleanPreferencesKey("ext_practice_auto")
         private val KEY_PRACTICE_DELAY = intPreferencesKey("ext_practice_delay")
+        private val KEY_AUTONOMOUS_MODE = booleanPreferencesKey("ext_autonomous_mode")
+        private val KEY_AUTONOMOUS_ELO_PROFILE = intPreferencesKey("ext_autonomous_elo_profile")
         private val KEY_TELEMETRY_WINDOW_JSON = stringPreferencesKey("ext_telemetry_window_json")
         private val KEY_TELEMETRY_LAST_RESET_MS = stringPreferencesKey("ext_telemetry_last_reset_ms")
     }

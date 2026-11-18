@@ -200,6 +200,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setPracticeAutoPlay(enabled: Boolean) = updateConfig { it.copy(practiceAutoPlay = enabled) }
 
+    fun setAutonomousMode(enabled: Boolean) = updateConfig { it.copy(autonomousMode = enabled) }
+
+    fun setAutonomousEloProfile(elo: Int) {
+        val safeElo = if (elo in listOf(1200, 1600, 2000)) elo else 1600
+        updateConfig { it.copy(autonomousEloProfile = safeElo) }
+    }
+
     fun setPracticeHumanDelayMs(delayMs: Int) =
         updateConfig { it.copy(practiceHumanDelayMs = delayMs.coerceIn(250, 2500)) }
 

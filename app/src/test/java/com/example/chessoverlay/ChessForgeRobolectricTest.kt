@@ -57,6 +57,11 @@ class ChessForgeRobolectricTest {
         composeRule.onNodeWithTag("settings_switch_annotations").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("settings_switch_adapt_theme").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("settings_switch_tablebase").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("settings_switch_autonomous_mode").performScrollTo().assertIsDisplayed().performClick()
+        composeRule.onNodeWithTag("settings_autonomous_elo_1200").performScrollTo().performClick()
+        composeRule.onNodeWithTag("settings_autonomous_elo_2000").performScrollTo().performClick()
+        composeRule.onNodeWithTag("settings_autonomous_elo_1600").performScrollTo().performClick()
+        composeRule.onNodeWithTag("settings_autonomous_profile_info").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("eval_orientation_horizontal").performScrollTo().performClick()
         composeRule.waitForIdle()
 
@@ -135,6 +140,8 @@ class ChessForgeRobolectricTest {
         vm.setShowTablebase(true)
         vm.setShowAnnotations(true)
         vm.setAutoAdaptTheme(true)
+        vm.setAutonomousMode(true)
+        vm.setAutonomousEloProfile(2000)
         vm.setEvalBarOrientation(EvalBarOrientation.HORIZONTAL)
         val cfg = vm.extensionConfig.value
         assertEquals(CpuUsageProfile.TURBO, cfg.cpuProfile)
@@ -145,6 +152,8 @@ class ChessForgeRobolectricTest {
         assertEquals(true, cfg.humanizerEnabled)
         assertEquals(1800, cfg.targetElo)
         assertEquals(true, cfg.showTablebase)
+        assertEquals(true, cfg.autonomousMode)
+        assertEquals(2000, cfg.autonomousEloProfile)
         assertEquals(EvalBarOrientation.HORIZONTAL, cfg.evalBarOrientation)
 
         val jsLiteral = cfg.toJsObjectLiteral()
@@ -157,6 +166,8 @@ class ChessForgeRobolectricTest {
         assertTrue(jsLiteral.contains("showOpeningBook:true"))
         assertTrue(jsLiteral.contains("showTablebase:true"))
         assertTrue(jsLiteral.contains("autoAdaptTheme:true"))
+        assertTrue(jsLiteral.contains("autonomousMode:true"))
+        assertTrue(jsLiteral.contains("autonomousEloProfile:2000"))
 
         vm.selectPreset(BrowserSitePreset.LICHESS)
         assertEquals(WorkspaceTab.BROWSER, vm.selectedTab.value)

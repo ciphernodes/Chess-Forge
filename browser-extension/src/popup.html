@@ -126,6 +126,18 @@
         <input type="checkbox" id="toggle-humanizer" checked />
       </div>
       <div class="row">
+        <label for="toggle-autonomous">Autonomous Mode</label>
+        <input type="checkbox" id="toggle-autonomous" />
+      </div>
+      <div class="row">
+        <label for="select-autonomous-elo">Move Selector Profile</label>
+        <select id="select-autonomous-elo">
+          <option value="1200">1200 Elo (Club Novice)</option>
+          <option value="1600" selected>1600 Elo (Intermediate)</option>
+          <option value="2000">2000 Elo (Expert Candidate)</option>
+        </select>
+      </div>
+      <div class="row">
         <label for="select-turn">Side to Move</label>
         <select id="select-turn">
           <option value="auto">Auto-Detect</option>

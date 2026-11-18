@@ -31,7 +31,9 @@
     targetElo: 1500,
     maxHintsPerGame: 3,
     practiceAutoPlay: false,
-    practiceHumanDelayMs: 650
+    practiceHumanDelayMs: 650,
+    autonomousMode: false,
+    autonomousEloProfile: 1600
   };
 
   let config = Object.assign({}, DEFAULT_CONFIG, window.__ChessForgeExtensionConfig || {});
@@ -1635,7 +1637,7 @@
     if (practiceAutoTimer) clearTimeout(practiceAutoTimer);
     if (
       boardInfo.isPracticeBoard === true &&
-      config.practiceAutoPlay &&
+      (config.practiceAutoPlay || config.autonomousMode) &&
       result.lines &&
       result.lines.length > 0 &&
       typeof window.__chessForgeMakePracticeMove === "function"
@@ -1643,7 +1645,7 @@
       const baseDelay = Math.max(250, Math.min(2500, parseInt(config.practiceHumanDelayMs || 650, 10)));
       const jitter = Math.round((Math.random() - 0.5) * Math.min(240, baseDelay * 0.35));
       practiceAutoTimer = setTimeout(() => {
-        if (config.enabled && config.practiceAutoPlay && boardInfo.isPracticeBoard === true) {
+        if (config.enabled && (config.practiceAutoPlay || config.autonomousMode) && boardInfo.isPracticeBoard === true) {
           window.__chessForgeMakePracticeMove(result.lines[0].uci);
         }
       }, baseDelay + jitter);

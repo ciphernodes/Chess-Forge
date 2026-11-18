@@ -123,6 +123,8 @@ fun ChessForgeScreen(
     onToggleHumanizer: (Boolean) -> Unit = {},
     onSelectTargetElo: (Int) -> Unit = {},
     onClearSessionTelemetry: () -> Unit = {},
+    onToggleAutonomousMode: (Boolean) -> Unit = {},
+    onSelectAutonomousEloProfile: (Int) -> Unit = {},
     onTogglePracticeAutoPlay: (Boolean) -> Unit,
     onChangePracticeDelay: (Int) -> Unit,
     onSelectPreset: (BrowserSitePreset) -> Unit,
@@ -259,6 +261,8 @@ fun ChessForgeScreen(
                         onToggleHumanizer = onToggleHumanizer,
                         onSelectTargetElo = onSelectTargetElo,
                         onClearSessionTelemetry = onClearSessionTelemetry,
+                        onToggleAutonomousMode = onToggleAutonomousMode,
+                        onSelectAutonomousEloProfile = onSelectAutonomousEloProfile,
                         onTogglePracticeAutoPlay = onTogglePracticeAutoPlay,
                         onChangePracticeDelay = onChangePracticeDelay
                     )

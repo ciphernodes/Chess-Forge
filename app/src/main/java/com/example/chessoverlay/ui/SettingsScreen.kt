@@ -20,6 +20,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoMode
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Memory
@@ -49,6 +50,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.chessoverlay.model.AutonomousEloProfile
 import com.example.chessoverlay.model.BrowserExtensionConfig
 import com.example.chessoverlay.model.CpuUsageProfile
 import com.example.chessoverlay.model.EngineStatus
@@ -88,6 +90,8 @@ fun SettingsScreen(
     onToggleHumanizer: (Boolean) -> Unit = {},
     onSelectTargetElo: (Int) -> Unit = {},
     onClearSessionTelemetry: () -> Unit = {},
+    onToggleAutonomousMode: (Boolean) -> Unit = {},
+    onSelectAutonomousEloProfile: (Int) -> Unit = {},
     onTogglePracticeAutoPlay: (Boolean) -> Unit,
     onChangePracticeDelay: (Int) -> Unit
 ) {
@@ -244,6 +248,147 @@ fun SettingsScreen(
                         color = TacticalEmerald,
                         modifier = Modifier.testTag("settings_telemetry_cleared_text")
                     )
+                }
+            }
+
+            // Autonomous Mode & Move Selector Card
+            SettingsSectionCard(
+                title = "Autonomous Mode & Move Selector",
+                icon = Icons.Default.AutoMode
+            ) {
+                val activeProfile = AutonomousEloProfile.fromElo(config.autonomousEloProfile)
+
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (config.autonomousMode) TacticalEmerald.copy(alpha = 0.16f) else CarbonSurfaceHigh,
+                    border = BorderStroke(1.dp, if (config.autonomousMode) TacticalEmerald.copy(alpha = 0.6f) else HairlineBorder),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(
+                            text = if (config.autonomousMode) {
+                                "Autonomous Mode Active • ${activeProfile.title} (${activeProfile.subtitle})"
+                            } else {
+                                "Autonomous Mode Paused • Profile: ${activeProfile.title}"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = if (config.autonomousMode) TacticalEmerald else MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = if (config.autonomousMode) {
+                                "Kinematic Bézier cursor drag • 40–110 ms dwell • Log-normal reaction scheduling"
+                            } else {
+                                "Enable to activate rating-calibrated move selection with realistic pointer execution."
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                SettingsToggleItem(
+                    title = "Autonomous Mode",
+                    subtitle = "Autonomous move selection with kinematic pointer drag execution and reaction-time scheduling",
+                    checked = config.autonomousMode,
+                    testTag = "settings_switch_autonomous_mode",
+                    onCheckedChange = onToggleAutonomousMode
+                )
+
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Move Selector Elo Profile",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "${activeProfile.title} (${activeProfile.subtitle})",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = TacticalEmerald
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        AutonomousEloProfile.entries.forEach { profile ->
+                            val active = config.autonomousEloProfile == profile.elo
+                            Surface(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(72.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable { onSelectAutonomousEloProfile(profile.elo) }
+                                    .testTag("settings_autonomous_elo_${profile.elo}"),
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (active) TacticalEmerald.copy(alpha = 0.22f) else CarbonSurfaceHigh,
+                                border = BorderStroke(if (active) 1.5.dp else 1.dp, if (active) TacticalEmerald else HairlineBorder)
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(6.dp),
+                                    verticalArrangement = Arrangement.Center,
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = "${profile.elo} Elo",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (active) TacticalEmerald else MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1
+                                    )
+                                    Text(
+                                        text = profile.subtitle,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (active) TacticalEmerald.copy(alpha = 0.85f) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = CarbonSurfaceHigh,
+                    border = BorderStroke(1.dp, HairlineBorder),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_autonomous_profile_info")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = "Selected Profile Parameters (${activeProfile.title}):",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = TacticalEmerald
+                        )
+                        Text(
+                            text = "• Rating: ${activeProfile.elo} Elo | Blunder Cap: max ${activeProfile.blunderCapCp} cp loss\n" +
+                                "• Search Depth: D${activeProfile.depth} | Boltzmann Temp: T = ${activeProfile.baseTemp}\n" +
+                                "• Kinematic Pointer: 2D Gaussian jitter (inner 60% clamp) & 40–110 ms dwell\n" +
+                                "• Time Trouble: < 15s remaining triggers panic search & faster pacing",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
 
