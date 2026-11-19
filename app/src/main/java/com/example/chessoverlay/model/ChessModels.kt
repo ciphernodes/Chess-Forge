@@ -59,6 +59,48 @@ enum class FairPlayRiskLevel(val key: String, val label: String) {
     }
 }
 
+enum class AndroidOverlayRuntimeMode(val key: String, val label: String) {
+    NATIVE_ACCESSIBILITY_OVERLAY("native_accessibility", "Native Chrome Overlay"),
+    WEBVIEW_COMPAT("webview_compat", "WebView Compat");
+
+    companion object {
+        fun fromKey(key: String?): AndroidOverlayRuntimeMode {
+            return entries.firstOrNull { it.key.equals(key, ignoreCase = true) }
+                ?: NATIVE_ACCESSIBILITY_OVERLAY
+        }
+    }
+}
+
+data class FairPlayTelemetryModel(
+    val riskLevel: FairPlayRiskLevel = FairPlayRiskLevel.SAFE,
+    val lockedOut: Boolean = false,
+    val lockoutReason: String? = null,
+    val baselineElo: Int = 1500,
+    val observedIpr: Int = 1500,
+    val zScore: Float = 0f,
+    val currentGameMoves: Int = 0,
+    val currentGameSiSpikes: Int = 0,
+    val lastSiScore: Float = 0f,
+    val slidingWindowGames: Int = 0,
+    val acpl: Float = 0f,
+    val warnings: List<String> = emptyList(),
+    val updatedAtMs: Long = 0L
+) {
+    fun toFairPlayStatus(): FairPlayStatus = FairPlayStatus(
+        riskLevel = riskLevel,
+        lockedOut = lockedOut,
+        lockoutReason = lockoutReason,
+        baselineElo = baselineElo,
+        observedIpr = observedIpr,
+        zScore = zScore,
+        currentGameMoves = currentGameMoves,
+        currentGameSiSpikes = currentGameSiSpikes,
+        slidingWindowGames = slidingWindowGames,
+        acpl = acpl,
+        warnings = warnings
+    )
+}
+
 data class FairPlayStatus(
     val riskLevel: FairPlayRiskLevel = FairPlayRiskLevel.SAFE,
     val lockedOut: Boolean = false,
@@ -71,7 +113,24 @@ data class FairPlayStatus(
     val slidingWindowGames: Int = 0,
     val acpl: Float = 0f,
     val warnings: List<String> = emptyList()
-)
+) {
+    fun toTelemetryModel(lastSiScore: Float = 0f, updatedAtMs: Long = 0L): FairPlayTelemetryModel =
+        FairPlayTelemetryModel(
+            riskLevel = riskLevel,
+            lockedOut = lockedOut,
+            lockoutReason = lockoutReason,
+            baselineElo = baselineElo,
+            observedIpr = observedIpr,
+            zScore = zScore,
+            currentGameMoves = currentGameMoves,
+            currentGameSiSpikes = currentGameSiSpikes,
+            lastSiScore = lastSiScore,
+            slidingWindowGames = slidingWindowGames,
+            acpl = acpl,
+            warnings = warnings,
+            updatedAtMs = updatedAtMs
+        )
+}
 
 enum class AutonomousEloProfile(
     val elo: Int,
@@ -115,7 +174,9 @@ data class BrowserExtensionConfig(
     val practiceAutoPlay: Boolean = false,
     val practiceHumanDelayMs: Int = 650,
     val autonomousMode: Boolean = false,
-    val autonomousEloProfile: Int = 1600
+    val autonomousEloProfile: Int = 1600,
+    val androidRuntimeMode: AndroidOverlayRuntimeMode = AndroidOverlayRuntimeMode.NATIVE_ACCESSIBILITY_OVERLAY,
+    val accessibilityDispatcherEnabled: Boolean = false
 ) {
     fun toJsObjectLiteral(): String {
         val safeTurn = when (turnOverride) {
@@ -145,7 +206,9 @@ data class BrowserExtensionConfig(
             "practiceAutoPlay:$practiceAutoPlay," +
             "practiceHumanDelayMs:${practiceHumanDelayMs.coerceIn(250, 2500)}," +
             "autonomousMode:$autonomousMode," +
-            "autonomousEloProfile:$safeEloProfile" +
+            "autonomousEloProfile:$safeEloProfile," +
+            "androidRuntimeMode:'${androidRuntimeMode.key}'," +
+            "accessibilityDispatcherEnabled:$accessibilityDispatcherEnabled" +
             "}"
     }
 }
@@ -240,5 +303,6 @@ data class BrowserAnalysisSnapshot(
     val tablebase: TablebaseState? = null,
     val boardTheme: BoardThemeInfo = BoardThemeInfo(),
     val lastMoveAnnotation: MoveAnnotationInfo? = null,
-    val fairPlayStatus: FairPlayStatus = FairPlayStatus()
+    val fairPlayStatus: FairPlayStatus = FairPlayStatus(),
+    val fairPlayTelemetry: FairPlayTelemetryModel = FairPlayTelemetryModel()
 )

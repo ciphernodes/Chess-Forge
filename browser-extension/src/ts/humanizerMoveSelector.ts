@@ -13,6 +13,7 @@ import {
   type MultiPvCandidateLine,
   type PieceColor,
 } from "./autoPlayPorts.ts";
+import type { OnnxPolicyRunner } from "./ports.ts";
 
 export {
   ELO_1200_PRESET,
@@ -37,7 +38,43 @@ export type SelectionRegime =
   | "QUIET_NATURAL_HUMAN"
   | "CRITICAL_BOLTZMANN_TOP3"
   | "FORCED_RECAPTURE_EXCEPTION"
+  | "LOW_CLOCK_BLUNDER_INJECTION"
   | "NO_CANDIDATE";
+
+export type HumanPriorSource = "ONNX_MAIA2" | "SUPPLIED" | "HEURISTIC_FALLBACK";
+
+export interface LowClockErrorModelConfig {
+  /** Explicit opt-in flag; defaults to false to preserve existing behavior. */
+  readonly enabled: boolean;
+  /** Clock threshold for 5% blunder injection (default 10_000 ms). */
+  readonly sub10sThresholdMs: number;
+  /** Blunder injection probability below 10s (default 0.05). */
+  readonly sub10sBlunderProb: number;
+  /** Clock threshold for 12% blunder injection (default 5_000 ms). */
+  readonly sub5sThresholdMs: number;
+  /** Blunder injection probability below 5s (default 0.12). */
+  readonly sub5sBlunderProb: number;
+  /** Minimum centipawn loss defining a low-clock blunder candidate (default 150). */
+  readonly minBlunderCpLoss: number;
+  /** Optional deterministic RNG hook for testing. */
+  readonly randomFn?: () => number;
+}
+
+export const DEFAULT_LOW_CLOCK_ERROR_CONFIG: LowClockErrorModelConfig = {
+  enabled: false,
+  sub10sThresholdMs: 10_000,
+  sub10sBlunderProb: 0.05,
+  sub5sThresholdMs: 5_000,
+  sub5sBlunderProb: 0.12,
+  minBlunderCpLoss: 150,
+};
+
+export interface HumanizerMoveSelectorExtras {
+  readonly onnxRunner?: OnnxPolicyRunner | null;
+  /** Opt-in flag for ONNX policy inference in selectMoveWithOnnx (default false unless runner explicitly enabled). */
+  readonly useOnnxPolicy?: boolean;
+  readonly lowClockErrorConfig?: Partial<LowClockErrorModelConfig>;
+}
 
 export interface SearchBudgetRecommendation {
   readonly timeTroubleActive: boolean;
@@ -62,10 +99,18 @@ export interface MoveSelectionRequest {
   readonly turn: PieceColor;
   readonly lines: readonly MultiPvCandidateLine[];
   readonly humanPriors?: HumanPriorsInput;
+  /** When true, skips synthetic fallback heuristics for any move covered by strict external ONNX priors. */
+  readonly strictExternalPriorsOnly?: boolean;
+  /** Optional explicit prior source tag for telemetry/auditing. */
+  readonly priorSource?: HumanPriorSource;
   readonly clockPort?: ClockStatePort;
   readonly clockSnapshot?: ClockStateSnapshot;
   /** Optional square of the immediately preceding opponent move (e.g., "d5") to detect recaptures. */
   readonly lastOpponentDestinationSquare?: string | null;
+  /** Optional behavioral Elo/temperature/blunder overrides (e.g. tilt/panic). */
+  readonly effectiveTargetEloOverride?: number;
+  readonly temperatureMultiplierOverride?: number;
+  readonly blunderCapAddCpOverride?: number;
 }
 
 export interface MoveSelectionResult {
@@ -81,6 +126,8 @@ export interface MoveSelectionResult {
   readonly lambdaUsed: number;
   readonly effectiveBlunderCapCp: number;
   readonly searchBudget: SearchBudgetRecommendation;
+  readonly priorSource?: HumanPriorSource;
+  readonly lowClockBlunderInjected?: boolean;
 }
 
 export const DEFAULT_MOVE_SELECTOR_CONFIG: MoveSelectorConfig =
@@ -280,9 +327,21 @@ export function deriveFallbackHumanPriors(
  */
 export class HumanizerMoveSelector {
   private config: MoveSelectorConfig;
+  private onnxRunner: OnnxPolicyRunner | null;
+  private useOnnxPolicy: boolean;
+  private lowClockErrorConfig: LowClockErrorModelConfig;
 
-  constructor(config: Partial<MoveSelectorConfig> = {}) {
+  constructor(
+    config: Partial<MoveSelectorConfig> = {},
+    extras: HumanizerMoveSelectorExtras = {}
+  ) {
     this.config = mergeSelectorConfig(DEFAULT_MOVE_SELECTOR_CONFIG, config);
+    this.onnxRunner = extras.onnxRunner ?? null;
+    this.useOnnxPolicy = extras.useOnnxPolicy ?? false;
+    this.lowClockErrorConfig = {
+      ...DEFAULT_LOW_CLOCK_ERROR_CONFIG,
+      ...extras.lowClockErrorConfig,
+    };
   }
 
   getConfig(): MoveSelectorConfig {
@@ -291,6 +350,80 @@ export class HumanizerMoveSelector {
 
   updateConfig(partial: Partial<MoveSelectorConfig>): void {
     this.config = mergeSelectorConfig(this.config, partial);
+  }
+
+  hasOnnxRunner(): boolean {
+    return this.onnxRunner !== null;
+  }
+
+  isOnnxPolicyEnabled(): boolean {
+    return this.useOnnxPolicy && this.onnxRunner !== null;
+  }
+
+  setOnnxRunner(
+    runner: OnnxPolicyRunner | null,
+    enableOnnx: boolean = runner !== null
+  ): void {
+    this.onnxRunner = runner;
+    this.useOnnxPolicy = enableOnnx;
+  }
+
+  getLowClockErrorConfig(): LowClockErrorModelConfig {
+    return this.lowClockErrorConfig;
+  }
+
+  updateLowClockErrorConfig(partial: Partial<LowClockErrorModelConfig>): void {
+    this.lowClockErrorConfig = {
+      ...this.lowClockErrorConfig,
+      ...partial,
+    };
+  }
+
+  /**
+   * Async selection path wired directly to `OnnxPolicyRunner` (Maia-2 ONNX).
+   * When ONNX is enabled and returns non-empty probabilities for the position,
+   * synthetic fallback priors are completely disabled so 1200/1600/2000 profiles
+   * rely purely on authentic rating-conditioned ONNX move distributions.
+   */
+  async selectMoveWithOnnx(
+    request: MoveSelectionRequest
+  ): Promise<MoveSelectionResult> {
+    if (request.humanPriors) {
+      return this.selectMove({
+        ...request,
+        priorSource: request.priorSource ?? "SUPPLIED",
+      });
+    }
+
+    const effectiveElo =
+      request.effectiveTargetEloOverride ?? this.config.targetElo;
+
+    if (this.useOnnxPolicy && this.onnxRunner && request.lines.length > 0) {
+      try {
+        const candidateUcis = request.lines.slice(0, 4).map((l) => l.move);
+        const onnxPriors = await this.onnxRunner.inferMoveProbs(
+          request.fen,
+          effectiveElo,
+          candidateUcis
+        );
+        if (onnxPriors && onnxPriors.size > 0) {
+          const normalized = normalizeExternalPriors(candidateUcis, onnxPriors);
+          return this.selectMove({
+            ...request,
+            humanPriors: normalized,
+            strictExternalPriorsOnly: true,
+            priorSource: "ONNX_MAIA2",
+          });
+        }
+      } catch {
+        // Only fall back when ONNX session is unloaded, returns empty, or throws.
+      }
+    }
+
+    return this.selectMove({
+      ...request,
+      priorSource: "HEURISTIC_FALLBACK",
+    });
   }
 
   /**
@@ -316,19 +449,37 @@ export class HumanizerMoveSelector {
       request.clockSnapshot ??
       (request.clockPort ? request.clockPort.readClockState(request.turn) : null);
     const searchBudget = computeSearchBudgetRecommendation(clockSnap, this.config);
+    const effectiveTargetElo =
+      request.effectiveTargetEloOverride ?? this.config.targetElo;
     const baseTemp =
-      this.config.baseTemperature > 0
+      request.effectiveTargetEloOverride !== undefined
+        ? computeInverseEloTemperature(effectiveTargetElo)
+        : this.config.baseTemperature > 0
         ? this.config.baseTemperature
         : computeInverseEloTemperature(this.config.targetElo);
+    const extraTempMult = Math.max(0.25, request.temperatureMultiplierOverride ?? 1.0);
     const temperature = Math.max(
       0.08,
-      baseTemp * searchBudget.temperatureMultiplier
+      baseTemp * searchBudget.temperatureMultiplier * extraTempMult
     );
     const lambda =
-      this.config.lambdaCp > 0
+      request.effectiveTargetEloOverride !== undefined
+        ? computeEloCpLambda(effectiveTargetElo)
+        : this.config.lambdaCp > 0
         ? this.config.lambdaCp
         : computeEloCpLambda(this.config.targetElo);
-    const blunderCap = computeBlunderCeilingCp(this.config);
+    const baseBlunderCap =
+      request.effectiveTargetEloOverride !== undefined
+        ? computeBlunderCeilingCp({
+            ...this.config,
+            targetElo: effectiveTargetElo,
+            maxAllowedBlunderCp: 0,
+          })
+        : computeBlunderCeilingCp(this.config);
+    const blunderCap = Math.max(
+      25,
+      baseBlunderCap + Math.round(request.blunderCapAddCpOverride ?? 0)
+    );
 
     if (rawLines.length === 0) {
       return {
@@ -344,6 +495,8 @@ export class HumanizerMoveSelector {
         lambdaUsed: lambda,
         effectiveBlunderCapCp: blunderCap,
         searchBudget,
+        priorSource: request.priorSource ?? "HEURISTIC_FALLBACK",
+        lowClockBlunderInjected: false,
       };
     }
 
@@ -352,17 +505,31 @@ export class HumanizerMoveSelector {
     const isCritical = expectedScoreDelta >= this.config.criticalWdlThreshold;
 
     const suppliedPriors = toPriorMap(request.humanPriors);
-    const fallbackPriors = deriveFallbackHumanPriors(
-      request.fen,
-      rawLines,
-      this.config.targetElo,
-      request.lastOpponentDestinationSquare
+    const useStrictExternal = Boolean(
+      request.strictExternalPriorsOnly && suppliedPriors && suppliedPriors.size > 0
     );
+    const fallbackPriors = useStrictExternal
+      ? null
+      : deriveFallbackHumanPriors(
+          request.fen,
+          rawLines,
+          effectiveTargetElo,
+          request.lastOpponentDestinationSquare
+        );
+    const resolvedPriorSource: HumanPriorSource = useStrictExternal
+      ? request.priorSource ?? "ONNX_MAIA2"
+      : suppliedPriors && suppliedPriors.size > 0
+      ? request.priorSource ?? "SUPPLIED"
+      : "HEURISTIC_FALLBACK";
+
     const resolvedPrior = (move: string): number => {
+      if (useStrictExternal && suppliedPriors) {
+        return clamp(suppliedPriors.get(move) ?? 0, 0, 1);
+      }
       if (suppliedPriors && suppliedPriors.has(move)) {
         return clamp(suppliedPriors.get(move) ?? 0, 0, 1);
       }
-      return clamp(fallbackPriors.get(move) ?? 0, 0, 1);
+      return clamp(fallbackPriors?.get(move) ?? 0, 0, 1);
     };
 
     const boardPieces = parseFenPieceMap(request.fen);
@@ -379,6 +546,70 @@ export class HumanizerMoveSelector {
         line.san?.includes("x") && boardPieces.has(toSq)
       );
     };
+
+    // Opt-in low-clock error modeling (<10s: 5%, <5s: 12%) overriding maxAllowedBlunderCp
+    const remainingClockMs = clockSnap?.activeRemainingMs ?? null;
+    if (
+      this.lowClockErrorConfig.enabled &&
+      remainingClockMs !== null
+    ) {
+      const errorProb =
+        remainingClockMs < this.lowClockErrorConfig.sub5sThresholdMs
+          ? this.lowClockErrorConfig.sub5sBlunderProb
+          : remainingClockMs < this.lowClockErrorConfig.sub10sThresholdMs
+          ? this.lowClockErrorConfig.sub10sBlunderProb
+          : 0;
+      if (errorProb > 0) {
+        const blunderCandidates = rawLines.filter((line) => {
+          const cpLoss = Math.max(0, bestCp - lineToComparableCp(line));
+          return cpLoss >= this.lowClockErrorConfig.minBlunderCpLoss;
+        });
+        if (blunderCandidates.length > 0) {
+          const errRng =
+            this.lowClockErrorConfig.randomFn ??
+            this.config.randomFn ??
+            Math.random;
+          if (errRng() < errorProb) {
+            const blunderDist: MoveCandidateProbability[] = blunderCandidates.map(
+              (line) => {
+                const wdl = normalizeWdlTriple(line);
+                const cpLoss = Math.max(0, bestCp - lineToComparableCp(line));
+                const prior = Math.max(1e-4, resolvedPrior(line.move));
+                return {
+                  line,
+                  wdl,
+                  expectedScore: computeExpectedScore(wdl),
+                  cpLoss,
+                  humanPrior: prior,
+                  utility: Math.log(prior) - 0.002 * cpLoss,
+                  probability: 1 / blunderCandidates.length,
+                };
+              }
+            );
+            const injected = sampleFromDistribution(blunderDist, errRng);
+            return {
+              selected: injected,
+              distribution: blunderDist,
+              excludedBlunderMoves: [],
+              excludedComputerTactics: [],
+              recaptureExceptionApplied: false,
+              expectedScoreDelta: Number(expectedScoreDelta.toFixed(4)),
+              isCriticalPosition: isCritical,
+              regime: "LOW_CLOCK_BLUNDER_INJECTION",
+              temperatureUsed: Number(temperature.toFixed(4)),
+              lambdaUsed: Number(lambda.toFixed(5)),
+              effectiveBlunderCapCp: Math.max(
+                blunderCap,
+                this.lowClockErrorConfig.minBlunderCpLoss
+              ),
+              searchBudget,
+              priorSource: resolvedPriorSource,
+              lowClockBlunderInjected: true,
+            };
+          }
+        }
+      }
+    }
 
     const excludedBlunderMoves: string[] = [];
     const excludedComputerTactics: string[] = [];
@@ -424,6 +655,8 @@ export class HumanizerMoveSelector {
         lambdaUsed: lambda,
         effectiveBlunderCapCp: blunderCap,
         searchBudget,
+        priorSource: resolvedPriorSource,
+        lowClockBlunderInjected: false,
       };
     }
 
@@ -503,8 +736,26 @@ export class HumanizerMoveSelector {
       lambdaUsed: Number(lambda.toFixed(5)),
       effectiveBlunderCapCp: blunderCap,
       searchBudget,
+      priorSource: resolvedPriorSource,
+      lowClockBlunderInjected: false,
     };
   }
+}
+
+function normalizeExternalPriors(
+  candidateUcis: readonly string[],
+  raw: ReadonlyMap<string, number>
+): ReadonlyMap<string, number> {
+  const weights = candidateUcis.map((uci) => Math.max(0, raw.get(uci) ?? 0));
+  const sum = weights.reduce((a, b) => a + b, 0);
+  const out = new Map<string, number>();
+  if (sum <= 0) {
+    return out;
+  }
+  candidateUcis.forEach((uci, idx) => {
+    out.set(uci, weights[idx] / sum);
+  });
+  return out;
 }
 
 function sampleFromDistribution(

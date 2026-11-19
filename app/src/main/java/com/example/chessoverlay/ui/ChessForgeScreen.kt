@@ -77,6 +77,7 @@ import com.example.chessoverlay.model.BrowserSitePreset
 import com.example.chessoverlay.model.CpuUsageProfile
 import com.example.chessoverlay.model.EngineStatus
 import com.example.chessoverlay.model.EvalBarOrientation
+import com.example.chessoverlay.model.FairPlayTelemetryModel
 import com.example.chessoverlay.model.WorkspaceTab
 import com.example.chessoverlay.ui.components.EngineStatusIndicator
 import com.example.chessoverlay.ui.components.EvaluationBar
@@ -130,7 +131,8 @@ fun ChessForgeScreen(
     onSelectPreset: (BrowserSitePreset) -> Unit,
     onNavigateUrl: (String) -> Unit,
     onPageStatusChange: (EngineStatus) -> Unit,
-    onWebAnalysisJson: (String) -> Unit
+    onWebAnalysisJson: (String) -> Unit,
+    onFairPlayTelemetry: (FairPlayTelemetryModel) -> Unit = {}
 ) {
     if (selectedTab != WorkspaceTab.EXTENSION) {
         BackHandler { onSelectTab(WorkspaceTab.EXTENSION) }
@@ -233,7 +235,8 @@ fun ChessForgeScreen(
                         onSelectCpuProfile = onSelectCpuProfile,
                         onSelectEvalOrientation = onSelectEvalOrientation,
                         onPageStatusChange = onPageStatusChange,
-                        onWebAnalysisJson = onWebAnalysisJson
+                        onWebAnalysisJson = onWebAnalysisJson,
+                        onFairPlayTelemetry = onFairPlayTelemetry
                     )
                 }
 
@@ -460,6 +463,7 @@ private fun ExtensionHubContent(
             FairPlayStatusIndicator(
                 status = liveAnalysis.fairPlayStatus,
                 auditorEnabled = extensionConfig.fairPlayAuditorEnabled,
+                telemetry = liveAnalysis.fairPlayTelemetry,
                 modifier = Modifier.fillMaxWidth()
             )
 

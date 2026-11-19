@@ -274,6 +274,15 @@
     }
   }
 
+  function parseFullmoveNumber(fen) {
+    const parts = (fen || "").trim().split(/\s+/);
+    if (parts.length >= 6) {
+      const n = parseInt(parts[5], 10);
+      if (Number.isFinite(n) && n >= 1) return n;
+    }
+    return 1;
+  }
+
   function lookup(fen, callback) {
     const key = fenKey(fen);
     if (!key) {
@@ -290,6 +299,11 @@
 
     if (localHit && callback) {
       callback(localHit);
+    }
+
+    // Silence remote explorer.lichess.ovh queries strictly after move 15; rely on offline ECO only.
+    if (parseFullmoveNumber(fen) > 15) {
+      return localHit;
     }
 
     // Prefer extension background script for CORS-safe network lookup, fall back to direct fetch
@@ -325,6 +339,7 @@
   globalScope.ChessForgeOpeningBook = {
     lookup,
     lookupBuiltin,
-    fetchLichessMasters
+    fetchLichessMasters,
+    parseFullmoveNumber
   };
 })(typeof self !== "undefined" ? self : window);

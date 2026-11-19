@@ -323,13 +323,11 @@
   if (elFairPlayToggle) elFairPlayToggle.addEventListener("change", () => pushConfigToActiveTab({ fairPlayAuditorEnabled: elFairPlayToggle.checked }));
   if (elClearTelemetry) {
     elClearTelemetry.addEventListener("click", () => {
-      chrome.storage.local.remove("chessForgeFairPlayWindowV1", () => {
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-          if (!tabs || !tabs[0]) return;
-          chrome.tabs.sendMessage(tabs[0].id, { type: "CLEAR_FAIRPLAY_TELEMETRY" }, (resp) => {
-            if (chrome.runtime.lastError) return;
-            if (resp && resp.fairPlay) renderFairPlay(resp.fairPlay);
-          });
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs || !tabs[0]) return;
+        chrome.tabs.sendMessage(tabs[0].id, { type: "CLEAR_FAIRPLAY_TELEMETRY" }, (resp) => {
+          if (chrome.runtime.lastError) return;
+          if (resp && resp.fairPlay) renderFairPlay(resp.fairPlay);
         });
       });
     });

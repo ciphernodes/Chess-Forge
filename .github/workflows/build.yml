@@ -26,7 +26,7 @@ jobs:
           node --check browser-extension/src/offscreen.js
           node --check browser-extension/src/popup.js
           node --check browser-extension/src/background.js
-          node --test browser-extension/src/ts/humanizerAndAuditor.test.ts
+          node --test browser-extension/src/ts/*.test.ts
 
       - name: Package Extension ZIP Check
         run: |

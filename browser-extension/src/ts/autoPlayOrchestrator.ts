@@ -32,6 +32,32 @@ import {
   type FrameScheduler,
   type PointerExecutionResult,
 } from "./kinematicPointerExecutor.ts";
+import {
+  BookAndTablebaseRouter,
+  type BookAndTablebaseRouterConfig,
+  type OpeningBookPort,
+  type TablebasePort,
+} from "./bookAndTablebaseRouter.ts";
+import type { DualStateReconciler } from "./dualStateReconciler.ts";
+import type {
+  FairPlayEventBus,
+  RiskLevelChangedEvent,
+} from "./fairPlayEventBus.ts";
+import type { OverlayRenderPort } from "./ports.ts";
+import type { BehavioralStateMachine } from "./behavioralStateMachine.ts";
+import type {
+  MonotonicClockTracker,
+  SessionPacingManager,
+} from "./clockAndSessionManager.ts";
+import type { GradualRatingCalibrator } from "./openingPreferenceMatrix.ts";
+import type {
+  InputModeDecision,
+  InputModeController,
+} from "./inputModeController.ts";
+import type {
+  PromotionHandler,
+  PromotionResolutionResult,
+} from "./promotionHandler.ts";
 
 export {
   ELO_1200_PRESET,
@@ -75,6 +101,9 @@ export type OrchestratorAbortReason =
   | "NO_PLAUSIBLE_MOVE"
   | "INVALID_UCI_MOVE"
   | "EXECUTION_ABORTED"
+  | "DEGRADED_READ_ONLY_MODE"
+  | "FAIR_PLAY_RISK_HALT"
+  | "SESSION_COOLDOWN_ACTIVE"
   | "DISPOSED";
 
 export interface AutoPlayCycleResult {
@@ -82,21 +111,44 @@ export interface AutoPlayCycleResult {
   readonly fen: string;
   readonly reason?: OrchestratorAbortReason;
   readonly selectedMoveUci?: string;
+  readonly source?: "OPENING_BOOK" | "TABLEBASE" | "ENGINE";
   readonly selection?: MoveSelectionResult;
   readonly delayCalculation?: ThinkDelayCalculation;
   readonly pointerResult?: PointerExecutionResult;
+  readonly inputModeDecision?: InputModeDecision;
+  readonly promotionResult?: PromotionResolutionResult;
+  readonly thinkWaitCompletedAtMs?: number;
+}
+
+export interface OrchestratorRiskReactionConfig {
+  /** Explicit opt-in flag; defaults to false to preserve existing behavior. */
+  readonly enabled: boolean;
+  /** Action taken when FairPlayAuditor transitions to ELEVATED (default "PAUSE"). */
+  readonly onElevated?: "PAUSE" | "STEP_DOWN_ELO";
+  /** Optional OverlayRenderPort cleared immediately upon LOCKOUT. */
+  readonly overlayPort?: OverlayRenderPort | null;
 }
 
 export interface AutoPlayOrchestratorOptions {
   readonly controlledSide: PieceColor | "both";
   readonly enabled?: boolean;
+  readonly activeEloPreset?: EloPresetId;
   readonly timingConfig?: Partial<OrchestratorTimingConfig>;
+  readonly bookAndTablebaseConfig?: Partial<BookAndTablebaseRouterConfig>;
+  readonly riskReactionConfig?: Partial<OrchestratorRiskReactionConfig>;
   readonly humanPriorsProvider?: (
     fen: string,
     analysis: EngineMultiPvResult
   ) => Promise<HumanPriorsInput | undefined> | HumanPriorsInput | undefined;
   readonly onCycleComplete?: (result: AutoPlayCycleResult) => void;
   readonly delayWaiter?: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** Phase 2 opt-in extensions (disabled by default unless collaborator `.isEnabled()` is true). */
+  readonly opponentElo?: number;
+  readonly useOnnxPolicy?: boolean;
+  readonly timeControl?: {
+    readonly initialTimeMs: number;
+    readonly incrementMs: number;
+  };
 }
 
 export const DEFAULT_ORCHESTRATOR_TIMING_CONFIG: OrchestratorTimingConfig =
@@ -292,6 +344,24 @@ export class AutoPlayOrchestrator {
   private readonly humanPriorsProvider?: AutoPlayOrchestratorOptions["humanPriorsProvider"];
   private readonly onCycleComplete?: (result: AutoPlayCycleResult) => void;
   private readonly delayWaiter: (ms: number, signal: AbortSignal) => Promise<void>;
+  private readonly bookAndTablebaseRouter: BookAndTablebaseRouter | null;
+  private readonly dualStateReconciler: DualStateReconciler | null;
+  private readonly fairPlayEventBus: FairPlayEventBus | null;
+  private readonly riskReactionConfig: OrchestratorRiskReactionConfig;
+  private readonly behavioralStateMachine: BehavioralStateMachine | null;
+  private readonly sessionPacingManager: SessionPacingManager | null;
+  private readonly monotonicClockTracker: MonotonicClockTracker | null;
+  private readonly ratingCalibrator: GradualRatingCalibrator | null;
+  private readonly inputModeController: InputModeController | null;
+  private readonly promotionHandler: PromotionHandler | null;
+  private opponentElo: number | undefined;
+  private readonly useOnnxPolicy: boolean;
+  private timeControl:
+    | { readonly initialTimeMs: number; readonly incrementMs: number }
+    | undefined;
+  private unsubscribeRiskBus: (() => void) | null = null;
+  private riskLockoutHalted = false;
+  private activeEloPreset: EloPresetId;
 
   constructor(
     ports: {
@@ -301,6 +371,17 @@ export class AutoPlayOrchestrator {
       readonly clockPort: ClockStatePort;
       readonly moveSelector: HumanizerMoveSelector;
       readonly pointerExecutor: KinematicPointerExecutor;
+      readonly openingBookPort?: OpeningBookPort;
+      readonly tablebasePort?: TablebasePort | null;
+      readonly bookAndTablebaseRouter?: BookAndTablebaseRouter | null;
+      readonly dualStateReconciler?: DualStateReconciler | null;
+      readonly fairPlayEventBus?: FairPlayEventBus | null;
+      readonly behavioralStateMachine?: BehavioralStateMachine | null;
+      readonly sessionPacingManager?: SessionPacingManager | null;
+      readonly monotonicClockTracker?: MonotonicClockTracker | null;
+      readonly ratingCalibrator?: GradualRatingCalibrator | null;
+      readonly inputModeController?: InputModeController | null;
+      readonly promotionHandler?: PromotionHandler | null;
     },
     options: AutoPlayOrchestratorOptions
   ) {
@@ -313,6 +394,7 @@ export class AutoPlayOrchestrator {
 
     this.controlledSide = options.controlledSide;
     this.enabled = options.enabled ?? true;
+    this.activeEloPreset = options.activeEloPreset ?? 1600;
     this.timingConfig = {
       ...DEFAULT_ORCHESTRATOR_TIMING_CONFIG,
       ...options.timingConfig,
@@ -320,6 +402,45 @@ export class AutoPlayOrchestrator {
     this.humanPriorsProvider = options.humanPriorsProvider;
     this.onCycleComplete = options.onCycleComplete;
     this.delayWaiter = options.delayWaiter ?? defaultAbortableWait;
+
+    this.bookAndTablebaseRouter =
+      ports.bookAndTablebaseRouter !== undefined
+        ? ports.bookAndTablebaseRouter
+        : ports.openingBookPort || ports.tablebasePort || options.bookAndTablebaseConfig
+        ? new BookAndTablebaseRouter(
+            {
+              openingBookPort: ports.openingBookPort,
+              tablebasePort: ports.tablebasePort ?? null,
+            },
+            { enabled: false, ...options.bookAndTablebaseConfig }
+          )
+        : null;
+
+    this.dualStateReconciler = ports.dualStateReconciler ?? null;
+    this.fairPlayEventBus = ports.fairPlayEventBus ?? null;
+    this.behavioralStateMachine = ports.behavioralStateMachine ?? null;
+    this.sessionPacingManager = ports.sessionPacingManager ?? null;
+    this.monotonicClockTracker = ports.monotonicClockTracker ?? null;
+    this.ratingCalibrator = ports.ratingCalibrator ?? null;
+    this.inputModeController = ports.inputModeController ?? null;
+    this.promotionHandler = ports.promotionHandler ?? null;
+    this.opponentElo = options.opponentElo;
+    this.useOnnxPolicy = options.useOnnxPolicy ?? false;
+    this.timeControl = options.timeControl;
+
+    this.riskReactionConfig = {
+      enabled: false,
+      onElevated: "PAUSE",
+      overlayPort: null,
+      ...options.riskReactionConfig,
+    };
+
+    if (this.fairPlayEventBus && this.riskReactionConfig.enabled) {
+      this.attachFairPlayEventBus(
+        this.fairPlayEventBus,
+        this.riskReactionConfig
+      );
+    }
   }
 
   start(): void {
@@ -377,13 +498,64 @@ export class AutoPlayOrchestrator {
     this.timingConfig = { ...this.timingConfig, ...partial };
   }
 
+  getActiveEloPreset(): EloPresetId {
+    return this.activeEloPreset;
+  }
+
   isAutonomousActive(): boolean {
     return (
       !this.disposed &&
       this.enabled &&
       !this.paused &&
-      !this.manualMouseInterrupted
+      !this.manualMouseInterrupted &&
+      !this.riskLockoutHalted &&
+      (!this.dualStateReconciler || this.dualStateReconciler.isAutonomousAllowed())
     );
+  }
+
+  attachFairPlayEventBus(
+    eventBus: FairPlayEventBus,
+    config: Partial<OrchestratorRiskReactionConfig> = {}
+  ): () => void {
+    this.unsubscribeRiskBus?.();
+    this.unsubscribeRiskBus = null;
+    const effective: OrchestratorRiskReactionConfig = {
+      ...this.riskReactionConfig,
+      ...config,
+    };
+    if (!effective.enabled) {
+      return () => {};
+    }
+
+    const onRisk = (event: RiskLevelChangedEvent): void => {
+      if (event.currentLevel === "LOCKOUT") {
+        this.riskLockoutHalted = true;
+        this.paused = true;
+        this.abortActiveCycle("FAIR_PLAY_RISK_HALT");
+        effective.overlayPort?.clearOverlay("LOCKOUT");
+      } else if (event.currentLevel === "ELEVATED") {
+        if (effective.onElevated === "STEP_DOWN_ELO") {
+          const nextElo: EloPresetId =
+            this.activeEloPreset === 2000 ? 1600 : 1200;
+          this.activeEloPreset = nextElo;
+          const nextPreset = getAutoPlayPreset(nextElo);
+          this.moveSelector.updateConfig(nextPreset.selector);
+          this.pointerExecutor.updateConfig(nextPreset.executor);
+          this.updateTimingConfig(nextPreset.orchestrator);
+        } else {
+          this.paused = true;
+          this.abortActiveCycle("FAIR_PLAY_RISK_HALT");
+        }
+      } else if (event.currentLevel === "SAFE") {
+        this.riskLockoutHalted = false;
+      }
+    };
+
+    this.unsubscribeRiskBus = eventBus.onRiskLevelChanged(onRisk);
+    return () => {
+      this.unsubscribeRiskBus?.();
+      this.unsubscribeRiskBus = null;
+    };
   }
 
   /**
@@ -401,6 +573,37 @@ export class AutoPlayOrchestrator {
   async handleBoardTransition(
     snapshot: BoardStateSnapshot
   ): Promise<AutoPlayCycleResult> {
+    if (
+      this.dualStateReconciler &&
+      this.dualStateReconciler.isEnabled() &&
+      !this.dualStateReconciler.isAutonomousAllowed()
+    ) {
+      return {
+        status: "SKIPPED",
+        fen: snapshot.fen,
+        reason: "DEGRADED_READ_ONLY_MODE",
+      };
+    }
+
+    if (this.riskLockoutHalted) {
+      return {
+        status: "SKIPPED",
+        fen: snapshot.fen,
+        reason: "FAIR_PLAY_RISK_HALT",
+      };
+    }
+
+    if (this.sessionPacingManager?.isEnabled()) {
+      const capCheck = this.sessionPacingManager.canStartNewGame();
+      if (!capCheck.allowed) {
+        return {
+          status: "SKIPPED",
+          fen: snapshot.fen,
+          reason: "SESSION_COOLDOWN_ACTIVE",
+        };
+      }
+    }
+
     if (!this.isAutonomousActive()) {
       return {
         status: "SKIPPED",
@@ -458,6 +661,8 @@ export class AutoPlayOrchestrator {
     this.unsubscribeBoard = null;
     this.detachPointerListeners?.();
     this.detachPointerListeners = null;
+    this.unsubscribeRiskBus?.();
+    this.unsubscribeRiskBus = null;
   }
 
   private abortActiveCycle(reason: OrchestratorAbortReason): void {
@@ -508,22 +713,87 @@ export class AutoPlayOrchestrator {
     signal: AbortSignal
   ): Promise<AutoPlayCycleResult> {
     const targetFen = snapshot.fen;
+    const activeClockPort =
+      this.monotonicClockTracker?.isEnabled()
+        ? this.monotonicClockTracker
+        : this.clockPort;
     const budget = this.moveSelector.getRecommendedSearchBudget(
       snapshot.turn,
-      this.clockPort
+      activeClockPort
     );
 
+    // Resolve optional Phase 2 effective Elo & behavioral modifiers (all default disabled)
+    const configuredElo = this.moveSelector.getConfig().targetElo;
+    let calibratedBaseElo =
+      this.ratingCalibrator?.isEnabled()
+        ? this.ratingCalibrator.getEffectiveRating()
+        : configuredElo;
+    if (this.sessionPacingManager?.isEnabled() && this.timeControl) {
+      const tc = this.sessionPacingManager.classifyTimeControl(
+        this.timeControl.initialTimeMs,
+        this.timeControl.incrementMs
+      );
+      if (tc.eloStepDown > 0) {
+        calibratedBaseElo = Math.max(400, calibratedBaseElo - tc.eloStepDown);
+      }
+    }
+    const behavioralProfile = this.behavioralStateMachine?.isEnabled()
+      ? this.behavioralStateMachine.getEffectiveProfile(calibratedBaseElo)
+      : null;
+    const hasBehavioralAdjustments =
+      this.ratingCalibrator?.isEnabled() === true ||
+      this.behavioralStateMachine?.isEnabled() === true ||
+      (this.sessionPacingManager?.isEnabled() === true &&
+        this.timeControl !== undefined);
+    const effectiveEloForTurn = behavioralProfile
+      ? behavioralProfile.effectiveElo
+      : calibratedBaseElo;
+
+    let routedSource: "OPENING_BOOK" | "TABLEBASE" | "ENGINE" = "ENGINE";
+    let directRoutedUci: string | null = null;
     let analysis: EngineMultiPvResult;
-    try {
-      analysis = await this.enginePort.analyzeMultiPv({
-        fen: targetFen,
-        multiPv: 4,
-        maxDepth: budget.recommendedDepth,
-        movetimeMs: budget.recommendedThinkTimeMs,
-        signal,
-      });
-    } catch (err) {
-      return this.mapAbortOrError(targetFen, signal, err);
+
+    if (this.bookAndTablebaseRouter?.isEnabled()) {
+      try {
+        const routed = await this.bookAndTablebaseRouter.resolveTurn(
+          targetFen,
+          snapshot.turn,
+          snapshot.moveNumber,
+          { targetElo: effectiveEloForTurn }
+        );
+        if (routed.handled && routed.selectedMoveUci) {
+          routedSource =
+            routed.source === "OPENING_BOOK" ? "OPENING_BOOK" : "TABLEBASE";
+          directRoutedUci = routed.selectedMoveUci;
+          analysis = {
+            fen: targetFen,
+            depth: routedSource === "TABLEBASE" ? 64 : 1,
+            lines: routed.candidateLines,
+          };
+        } else {
+          analysis = await this.enginePort.analyzeMultiPv({
+            fen: targetFen,
+            multiPv: 4,
+            maxDepth: budget.recommendedDepth,
+            movetimeMs: budget.recommendedThinkTimeMs,
+            signal,
+          });
+        }
+      } catch (err) {
+        return this.mapAbortOrError(targetFen, signal, err);
+      }
+    } else {
+      try {
+        analysis = await this.enginePort.analyzeMultiPv({
+          fen: targetFen,
+          multiPv: 4,
+          maxDepth: budget.recommendedDepth,
+          movetimeMs: budget.recommendedThinkTimeMs,
+          signal,
+        });
+      } catch (err) {
+        return this.mapAbortOrError(targetFen, signal, err);
+      }
     }
 
     if (signal.aborted) {
@@ -538,7 +808,9 @@ export class AutoPlayOrchestrator {
       return {
         status: "ABORTED",
         fen: targetFen,
-        reason: this.manualMouseInterrupted
+        reason: this.riskLockoutHalted
+          ? "FAIR_PLAY_RISK_HALT"
+          : this.manualMouseInterrupted
           ? "USER_MOUSE_MOVEMENT"
           : "CONTROLLER_PAUSED",
       };
@@ -553,32 +825,85 @@ export class AutoPlayOrchestrator {
       };
     }
 
-    const clockSnap = this.clockPort.readClockState(snapshot.turn);
-    const suppliedPriors = this.humanPriorsProvider
-      ? await this.humanPriorsProvider(targetFen, analysis)
-      : undefined;
+    const clockSnap = activeClockPort.readClockState(snapshot.turn);
+    let selection: MoveSelectionResult;
 
-    const lastDestSq =
-      snapshot.lastMoveUci && snapshot.lastMoveUci.length >= 4
-        ? snapshot.lastMoveUci.slice(2, 4)
-        : null;
-
-    const selection = this.moveSelector.selectMove({
-      fen: targetFen,
-      turn: snapshot.turn,
-      lines: analysis.lines,
-      humanPriors: suppliedPriors,
-      clockSnapshot: clockSnap,
-      lastOpponentDestinationSquare: lastDestSq,
-    });
-
-    if (!selection.selected) {
-      return {
-        status: "NO_MOVE",
-        fen: targetFen,
-        reason: "NO_PLAUSIBLE_MOVE",
-        selection,
+    if (directRoutedUci && analysis.lines.length > 0) {
+      const matchedLine =
+        analysis.lines.find((l) => l.move === directRoutedUci) ??
+        analysis.lines[0];
+      selection = {
+        selected: {
+          line: matchedLine,
+          wdl: [0.5, 0.35, 0.15],
+          expectedScore: 0.675,
+          cpLoss: 0,
+          humanPrior: 1.0,
+          utility: 1.0,
+          probability: 1.0,
+        },
+        distribution: [
+          {
+            line: matchedLine,
+            wdl: [0.5, 0.35, 0.15],
+            expectedScore: 0.675,
+            cpLoss: 0,
+            humanPrior: 1.0,
+            utility: 1.0,
+            probability: 1.0,
+          },
+        ],
+        expectedScoreDelta: 0.05,
+        isCriticalPosition: false,
+        recaptureExceptionApplied: false,
+        excludedBlunderMoves: [],
+        excludedComputerTactics: [],
+        temperatureUsed: budget.temperatureMultiplier,
+        lambdaUsed: 0.019,
+        effectiveBlunderCapCp: this.moveSelector.getConfig().maxAllowedBlunderCp,
+        searchBudget: budget,
+        regime: "QUIET_NATURAL_HUMAN",
       };
+    } else {
+      const suppliedPriors = this.humanPriorsProvider
+        ? await this.humanPriorsProvider(targetFen, analysis)
+        : undefined;
+
+      const lastDestSq =
+        snapshot.lastMoveUci && snapshot.lastMoveUci.length >= 4
+          ? snapshot.lastMoveUci.slice(2, 4)
+          : null;
+
+      const selectionReq = {
+        fen: targetFen,
+        turn: snapshot.turn,
+        lines: analysis.lines,
+        humanPriors: suppliedPriors,
+        clockSnapshot: clockSnap,
+        lastOpponentDestinationSquare: lastDestSq,
+        ...(hasBehavioralAdjustments
+          ? {
+              effectiveTargetEloOverride: effectiveEloForTurn,
+              temperatureMultiplierOverride:
+                behavioralProfile?.temperatureMultiplier,
+              blunderCapAddCpOverride: behavioralProfile?.blunderCapAddCp,
+            }
+          : {}),
+      };
+
+      selection =
+        this.useOnnxPolicy && this.moveSelector.isOnnxPolicyEnabled()
+          ? await this.moveSelector.selectMoveWithOnnx(selectionReq)
+          : this.moveSelector.selectMove(selectionReq);
+
+      if (!selection.selected) {
+        return {
+          status: "NO_MOVE",
+          fen: targetFen,
+          reason: "NO_PLAUSIBLE_MOVE",
+          selection,
+        };
+      }
     }
 
     const squares = parseUciMoveSquares(selection.selected.line.move);
@@ -596,14 +921,64 @@ export class AutoPlayOrchestrator {
       analysis,
       selection
     );
-    const delayCalculation = sampleComplexityThinkDelay(
+    let delayCalculation = sampleComplexityThinkDelay(
       complexity,
       clockSnap,
       this.timingConfig
     );
 
+    if (
+      behavioralProfile ||
+      this.sessionPacingManager?.isEnabled() ||
+      this.monotonicClockTracker?.isEnabled()
+    ) {
+      let adjustedMs = delayCalculation.delayMs;
+      if (behavioralProfile) {
+        adjustedMs = Math.round(adjustedMs * behavioralProfile.thinkTimeMultiplier);
+      }
+      if (this.monotonicClockTracker?.isEnabled()) {
+        const curve = this.monotonicClockTracker.getTimeControlCurve(snapshot.turn);
+        adjustedMs = Math.max(
+          curve.recommendedFloorMs,
+          Math.round(
+            delayCalculation.baseLogNormalMs *
+              this.timingConfig.ratingPacingMultiplier *
+              curve.compressionFactor *
+              (behavioralProfile?.thinkTimeMultiplier ?? 1.0)
+          )
+        );
+      }
+      if (this.sessionPacingManager?.isEnabled()) {
+        const oppMult = this.sessionPacingManager.computeOpponentEloMultiplier(
+          effectiveEloForTurn,
+          this.opponentElo
+        );
+        const circMult = this.sessionPacingManager.computeCircadianMultiplier();
+        const openingFloor = this.sessionPacingManager.sampleOpeningPacingFloorMs(
+          snapshot.moveNumber ?? 10
+        );
+        adjustedMs = Math.max(
+          openingFloor,
+          Math.round(adjustedMs * oppMult * circMult)
+        );
+        this.sessionPacingManager.recordThinkTimeObservation(
+          adjustedMs,
+          budget.recommendedDepth,
+          complexity.complexityScore
+        );
+      }
+      delayCalculation = {
+        ...delayCalculation,
+        delayMs: Math.max(this.timingConfig.minThinkFloorMs, adjustedMs),
+      };
+    }
+
+    // Execute ALL think-time delays strictly BEFORE pointer movement starts
+    // so move packets transmit immediately upon pointer release without buffering.
+    let thinkWaitCompletedAtMs = Date.now();
     try {
       await this.delayWaiter(delayCalculation.delayMs, signal);
+      thinkWaitCompletedAtMs = Date.now();
     } catch (err) {
       return this.mapAbortOrError(
         targetFen,
@@ -662,10 +1037,36 @@ export class AutoPlayOrchestrator {
       };
     }
 
+    const inputModeDecision = this.inputModeController?.isEnabled()
+      ? this.inputModeController.selectInputMode({
+          targetElo: effectiveEloForTurn,
+          remainingClockMs: clockSnap.activeRemainingMs,
+          isOpponentTurn: false,
+        })
+      : undefined;
+    const interactionModeOverride =
+      inputModeDecision && inputModeDecision.inputMode !== "premove"
+        ? inputModeDecision.inputMode
+        : undefined;
+
+    const derivedPly = snapshot.moveNumber
+      ? (snapshot.moveNumber - 1) * 2 + (snapshot.turn === "b" ? 1 : 0)
+      : undefined;
+    const positionCriticality = clamp(
+      selection.expectedScoreDelta * 3.0 + complexity.complexityScore * 0.4,
+      0,
+      1
+    );
+
     const pointerResult = await this.pointerExecutor.executeMove(
       squares.from,
       squares.to,
-      { signal }
+      {
+        signal,
+        interactionModeOverride,
+        gamePly: derivedPly,
+        positionCriticality,
+      }
     );
 
     if (!pointerResult.executed || pointerResult.aborted) {
@@ -679,16 +1080,34 @@ export class AutoPlayOrchestrator {
         selection,
         delayCalculation,
         pointerResult,
+        inputModeDecision,
+        thinkWaitCompletedAtMs,
       };
+    }
+
+    let promotionResult: PromotionResolutionResult | undefined;
+    if (this.promotionHandler?.isEnabled()) {
+      promotionResult = await this.promotionHandler.handlePostMovePromotion({
+        uciMove: selection.selected.line.move,
+        turn: snapshot.turn,
+        targetElo: effectiveEloForTurn,
+        candidateLines: analysis.lines,
+        signal,
+      });
     }
 
     return {
       status: "EXECUTED",
       fen: targetFen,
-      selectedMoveUci: selection.selected.line.move,
+      selectedMoveUci:
+        promotionResult?.effectiveUciMove ?? selection.selected.line.move,
+      source: routedSource,
       selection,
       delayCalculation,
       pointerResult,
+      inputModeDecision,
+      promotionResult,
+      thinkWaitCompletedAtMs,
     };
   }
 
@@ -857,6 +1276,8 @@ function resolveAbortReason(signal: AbortSignal): OrchestratorAbortReason {
     r === "FEN_CHANGED_BEFORE_EXECUTION" ||
     r === "USER_MOUSE_MOVEMENT" ||
     r === "CONTROLLER_PAUSED" ||
+    r === "DEGRADED_READ_ONLY_MODE" ||
+    r === "FAIR_PLAY_RISK_HALT" ||
     r === "DISPOSED"
   ) {
     return r;

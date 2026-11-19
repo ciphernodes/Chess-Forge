@@ -15,6 +15,10 @@ import {
   type PersistedAuditorWindow,
 } from "./fairPlayModels.ts";
 import { comparableCp, type EngineAnalysis, type EngineLine } from "./ports.ts";
+import {
+  FAIR_PLAY_PRIVACY_WINDOW_SIZE,
+  FairPlayEventBus,
+} from "./fairPlayEventBus.ts";
 
 export interface RecordMoveInput {
   readonly fenBefore: string;
@@ -26,10 +30,20 @@ export interface RecordMoveInput {
   readonly timestampMs?: number;
 }
 
+export interface PrivacyTelemetryOptions {
+  /** Explicit opt-in flag; defaults to false to preserve legacy 20-game behavior. */
+  readonly enabled: boolean;
+  /** Rolling in-memory game window size when privacy mode is enabled (default 5). */
+  readonly rollingWindowSize?: number;
+}
+
 export interface FairPlayAuditorOptions {
   readonly baselineElo?: number;
   readonly storage?: FairPlayStorageAdapter | null;
   readonly initialWindow?: readonly GameTelemetrySummary[];
+  readonly eventBus?: FairPlayEventBus | null;
+  readonly rollingWindowSize?: number;
+  readonly privacyMode?: PrivacyTelemetryOptions;
 }
 
 export class InMemoryFairPlayStorage implements FairPlayStorageAdapter {
@@ -49,18 +63,33 @@ export class InMemoryFairPlayStorage implements FairPlayStorageAdapter {
 export class FairPlayAuditor {
   private baselineElo: number;
   private readonly storage: FairPlayStorageAdapter | null;
+  private readonly eventBus: FairPlayEventBus | null;
+  private readonly maxWindowSize: number;
+  private readonly privacyModeEnabled: boolean;
   private windowGames: GameTelemetrySummary[];
   private currentMoves: CompletedMoveRecord[];
   private lockedOut = false;
   private lockoutReason: string | null = null;
   private cachedSnapshot: FairPlayMetricsSnapshot;
+  private lastEmittedRiskLevel: FairPlayRiskLevel = "SAFE";
 
   constructor(options: FairPlayAuditorOptions = {}) {
     this.baselineElo = clamp(options.baselineElo ?? 1500, 400, 3000);
     this.storage = options.storage ?? null;
-    this.windowGames = (options.initialWindow ?? []).slice(-FAIR_PLAY_WINDOW_SIZE);
+    this.eventBus = options.eventBus ?? null;
+    this.privacyModeEnabled = options.privacyMode?.enabled === true;
+    const configuredSize = this.privacyModeEnabled
+      ? options.privacyMode?.rollingWindowSize ?? FAIR_PLAY_PRIVACY_WINDOW_SIZE
+      : options.rollingWindowSize ?? FAIR_PLAY_WINDOW_SIZE;
+    this.maxWindowSize = Math.max(1, Math.round(configuredSize));
+    this.windowGames = (options.initialWindow ?? []).slice(-this.maxWindowSize);
     this.currentMoves = [];
     this.cachedSnapshot = this.computeSnapshot();
+    this.lastEmittedRiskLevel = this.cachedSnapshot.riskLevel;
+  }
+
+  getEventBus(): FairPlayEventBus | null {
+    return this.eventBus;
   }
 
   async loadPersistedWindow(): Promise<void> {
@@ -70,12 +99,12 @@ export class FairPlayAuditor {
       if (!raw || typeof raw !== "object") return;
       const obj = raw as Partial<PersistedAuditorWindow>;
       if (Array.isArray(obj.games)) {
-        this.windowGames = obj.games.slice(-FAIR_PLAY_WINDOW_SIZE);
+        this.windowGames = obj.games.slice(-this.maxWindowSize);
       }
       if (typeof obj.baselineElo === "number" && !Number.isNaN(obj.baselineElo)) {
         this.baselineElo = clamp(obj.baselineElo, 400, 3000);
       }
-      this.cachedSnapshot = this.computeSnapshot();
+      this.refreshSnapshotAndEmit("LOADED_WINDOW");
     } catch {
       // Ignore corrupt storage entries safely
     }
@@ -85,14 +114,14 @@ export class FairPlayAuditor {
     if (!this.storage) return;
     const payload: PersistedAuditorWindow = {
       baselineElo: this.baselineElo,
-      games: this.windowGames.slice(-FAIR_PLAY_WINDOW_SIZE),
+      games: this.windowGames.slice(-this.maxWindowSize),
     };
     await this.storage.set({ [FAIR_PLAY_STORAGE_KEY]: payload });
   }
 
   setBaselineElo(targetElo: number): void {
     this.baselineElo = clamp(targetElo, 400, 3000);
-    this.cachedSnapshot = this.computeSnapshot();
+    this.refreshSnapshotAndEmit("BASELINE_ELO_CHANGED");
   }
 
   getSnapshot(): FairPlayMetricsSnapshot {
@@ -209,7 +238,9 @@ export class FairPlayAuditor {
     };
 
     this.currentMoves.push(record);
-    this.cachedSnapshot = this.computeSnapshot();
+    this.refreshSnapshotAndEmit(
+      record.isSiSpike ? "SI_CRITICAL_SPIKE" : "MOVE_RECORDED"
+    );
     return record;
   }
 
@@ -221,23 +252,40 @@ export class FairPlayAuditor {
       this.currentMoves,
       this.cachedSnapshot.observedIpr
     );
-    this.windowGames = [...this.windowGames, summary].slice(-FAIR_PLAY_WINDOW_SIZE);
+    this.windowGames = [...this.windowGames, summary].slice(-this.maxWindowSize);
     this.currentMoves = [];
-    this.cachedSnapshot = this.computeSnapshot();
+    this.refreshSnapshotAndEmit("GAME_FINISHED");
     await this.savePersistedWindow();
     return summary;
   }
 
   resetCurrentGame(): void {
     this.currentMoves = [];
-    this.cachedSnapshot = this.computeSnapshot();
+    this.refreshSnapshotAndEmit("CURRENT_GAME_RESET");
   }
 
   resetSessionLockout(): void {
     this.lockedOut = false;
     this.lockoutReason = null;
     this.currentMoves = [];
+    this.refreshSnapshotAndEmit("SESSION_LOCKOUT_RESET");
+  }
+
+  private refreshSnapshotAndEmit(reason: string | null): void {
+    const previousLevel = this.lastEmittedRiskLevel;
     this.cachedSnapshot = this.computeSnapshot();
+    const currentLevel = this.cachedSnapshot.riskLevel;
+    if (currentLevel !== previousLevel) {
+      this.lastEmittedRiskLevel = currentLevel;
+      this.eventBus?.emitRiskLevelChanged({
+        type: "RiskLevelChanged",
+        previousLevel,
+        currentLevel,
+        snapshot: this.cachedSnapshot,
+        reason: this.cachedSnapshot.lockoutReason ?? reason,
+        timestampMs: Date.now(),
+      });
+    }
   }
 
   private computeSnapshot(): FairPlayMetricsSnapshot {

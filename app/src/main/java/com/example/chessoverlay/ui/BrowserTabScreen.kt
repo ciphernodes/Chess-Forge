@@ -2,9 +2,7 @@ package com.example.chessoverlay.ui
 
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
-import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
-import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.animation.AnimatedVisibility
@@ -78,12 +76,16 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.example.chessoverlay.bridge.AccessibilityDispatcher
+import com.example.chessoverlay.bridge.ChessForgeAndroidBridge
+import com.example.chessoverlay.bridge.WebViewCompatHelper
 import com.example.chessoverlay.model.BrowserAnalysisSnapshot
 import com.example.chessoverlay.model.BrowserExtensionConfig
 import com.example.chessoverlay.model.BrowserSitePreset
 import com.example.chessoverlay.model.CpuUsageProfile
 import com.example.chessoverlay.model.EngineStatus
 import com.example.chessoverlay.model.EvalBarOrientation
+import com.example.chessoverlay.model.FairPlayTelemetryModel
 import com.example.chessoverlay.ui.components.EngineStatusIndicator
 import com.example.chessoverlay.ui.components.EvaluationBar
 import com.example.chessoverlay.ui.components.FairPlayStatusIndicator
@@ -95,15 +97,6 @@ import com.example.chessoverlay.ui.theme.TacticalEmerald
 import com.example.chessoverlay.ui.theme.TacticalRed
 import com.example.chessoverlay.util.AssetManagerHelper
 import kotlin.math.abs
-
-class ChessForgeWebBridge(
-    private val onAnalysisUpdateJson: (String) -> Unit
-) {
-    @JavascriptInterface
-    fun onAnalysisUpdate(json: String) {
-        onAnalysisUpdateJson(json)
-    }
-}
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -121,7 +114,8 @@ fun BrowserWorkspaceTab(
     onSelectCpuProfile: (CpuUsageProfile) -> Unit,
     onSelectEvalOrientation: (EvalBarOrientation) -> Unit,
     onPageStatusChange: (EngineStatus) -> Unit,
-    onWebAnalysisJson: (String) -> Unit
+    onWebAnalysisJson: (String) -> Unit,
+    onFairPlayTelemetry: (FairPlayTelemetryModel) -> Unit = {}
 ) {
     val context = LocalContext.current
     var urlInput by remember(activeUrl) { mutableStateOf(activeUrl) }
@@ -131,6 +125,9 @@ fun BrowserWorkspaceTab(
     var stripExpanded by remember { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var webViewUnavailableReason by remember { mutableStateOf<String?>(null) }
+    val accessibilityDispatcher = remember {
+        AccessibilityDispatcher(enabled = extensionConfig.accessibilityDispatcherEnabled)
+    }
 
     val engineJs = remember(context) {
         AssetManagerHelper.readAssetText(context, AssetManagerHelper.EXTENSION_ENGINE_JS)
@@ -146,6 +143,7 @@ fun BrowserWorkspaceTab(
     }
 
     LaunchedEffect(extensionConfig) {
+        accessibilityDispatcher.enabled = extensionConfig.accessibilityDispatcherEnabled
         val wv = webViewRef ?: return@LaunchedEffect
         val js = "window.__chessForgeUpdateConfig && window.__chessForgeUpdateConfig(${extensionConfig.toJsObjectLiteral()});"
         try {
@@ -439,8 +437,24 @@ fun BrowserWorkspaceTab(
                     FairPlayStatusIndicator(
                         status = liveAnalysis.fairPlayStatus,
                         auditorEnabled = extensionConfig.fairPlayAuditorEnabled,
-                        compact = true
+                        compact = true,
+                        telemetry = liveAnalysis.fairPlayTelemetry,
+                        showTelemetryMetrics = true
                     )
+
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = CarbonSurfaceHigh,
+                        border = BorderStroke(1.dp, HairlineBorder),
+                        modifier = Modifier.testTag("browser_runtime_mode_badge")
+                    ) {
+                        Text(
+                            text = extensionConfig.androidRuntimeMode.label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                        )
+                    }
                 }
             }
 
@@ -522,20 +536,22 @@ fun BrowserWorkspaceTab(
                             factory = { ctx ->
                                 try {
                                     WebView(ctx).apply {
-                                        settings.apply {
-                                            javaScriptEnabled = true
-                                            domStorageEnabled = true
-                                            allowFileAccess = true
-                                            useWideViewPort = true
-                                            loadWithOverviewMode = true
-                                            builtInZoomControls = true
-                                            displayZoomControls = false
-                                            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-                                        }
+                                        WebViewCompatHelper.configureCompatibleWebSettings(
+                                            settings = settings,
+                                            applyChromeAndroidUserAgent = true
+                                        )
                                         addJavascriptInterface(
-                                            ChessForgeWebBridge { json ->
-                                                post { onWebAnalysisJson(json) }
-                                            },
+                                            ChessForgeAndroidBridge(
+                                                onAnalysisUpdateJson = { json ->
+                                                    post { onWebAnalysisJson(json) }
+                                                },
+                                                onFairPlayTelemetryParsed = { telemetry ->
+                                                    post { onFairPlayTelemetry(telemetry) }
+                                                },
+                                                accessibilityDispatcher = accessibilityDispatcher,
+                                                runtimeModeProvider = { extensionConfig.androidRuntimeMode },
+                                                fallbackBaselineEloProvider = { extensionConfig.targetElo }
+                                            ),
                                             "ChessForgeAndroidBridge"
                                         )
                                         webChromeClient = WebChromeClient()
@@ -557,6 +573,8 @@ fun BrowserWorkspaceTab(
                                                 onPageStatusChange(EngineStatus.IDLE)
                                                 if (view == null || engineJs.isEmpty() || contentJs.isEmpty()) return
                                                 val bootstrap = buildString {
+                                                    append(WebViewCompatHelper.buildChromeRuntimeStoragePolyfillJs())
+                                                    append("\n")
                                                     append("window.__ChessForgeExtensionConfig = ")
                                                     append(extensionConfig.toJsObjectLiteral())
                                                     append(";\n")
@@ -590,11 +608,13 @@ fun BrowserWorkspaceTab(
                         )
                     }
 
-                    // Live FairPlay Risk Level Overlay Status Indicator (SAFE / ELEVATED / LOCKOUT)
+                    // Live FairPlay Risk Level Overlay Status Indicator (SAFE / ELEVATED / LOCKOUT + S_i spikes, Z-score, ACPL)
                     FairPlayStatusIndicator(
                         status = liveAnalysis.fairPlayStatus,
                         auditorEnabled = extensionConfig.fairPlayAuditorEnabled,
                         compact = true,
+                        telemetry = liveAnalysis.fairPlayTelemetry,
+                        showTelemetryMetrics = true,
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .padding(10.dp)

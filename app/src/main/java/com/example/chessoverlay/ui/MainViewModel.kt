@@ -3,7 +3,9 @@ package com.example.chessoverlay.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.chessoverlay.bridge.FairPlayTelemetryParser
 import com.example.chessoverlay.model.AnalysisLine
+import com.example.chessoverlay.model.AndroidOverlayRuntimeMode
 import com.example.chessoverlay.model.BoardThemeInfo
 import com.example.chessoverlay.model.BrowserAnalysisSnapshot
 import com.example.chessoverlay.model.BrowserExtensionConfig
@@ -13,6 +15,7 @@ import com.example.chessoverlay.model.EngineStatus
 import com.example.chessoverlay.model.EvalBarOrientation
 import com.example.chessoverlay.model.FairPlayRiskLevel
 import com.example.chessoverlay.model.FairPlayStatus
+import com.example.chessoverlay.model.FairPlayTelemetryModel
 import com.example.chessoverlay.model.MoveAnnotationInfo
 import com.example.chessoverlay.model.OpeningBookMove
 import com.example.chessoverlay.model.OpeningBookState
@@ -177,21 +180,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             preferences.clearSessionTelemetryStorage()
         }
         val baseline = _extensionConfig.value.targetElo
+        val resetStatus = FairPlayStatus(
+            riskLevel = FairPlayRiskLevel.SAFE,
+            lockedOut = false,
+            lockoutReason = null,
+            baselineElo = baseline,
+            observedIpr = baseline,
+            zScore = 0f,
+            currentGameMoves = 0,
+            currentGameSiSpikes = 0,
+            slidingWindowGames = 0,
+            acpl = 0f,
+            warnings = emptyList()
+        )
         _liveAnalysis.update { current ->
             current.copy(
-                fairPlayStatus = FairPlayStatus(
-                    riskLevel = FairPlayRiskLevel.SAFE,
-                    lockedOut = false,
-                    lockoutReason = null,
-                    baselineElo = baseline,
-                    observedIpr = baseline,
-                    zScore = 0f,
-                    currentGameMoves = 0,
-                    currentGameSiSpikes = 0,
-                    slidingWindowGames = 0,
-                    acpl = 0f,
-                    warnings = emptyList()
-                )
+                fairPlayStatus = resetStatus,
+                fairPlayTelemetry = resetStatus.toTelemetryModel()
             )
         }
         _telemetryResetNonce.update { it + 1 }
@@ -205,6 +210,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setAutonomousEloProfile(elo: Int) {
         val safeElo = if (elo in listOf(1200, 1600, 2000)) elo else 1600
         updateConfig { it.copy(autonomousEloProfile = safeElo) }
+    }
+
+    fun setAndroidRuntimeMode(mode: AndroidOverlayRuntimeMode) =
+        updateConfig { it.copy(androidRuntimeMode = mode) }
+
+    fun setAccessibilityDispatcherEnabled(enabled: Boolean) =
+        updateConfig { it.copy(accessibilityDispatcherEnabled = enabled) }
+
+    fun onFairPlayTelemetryJson(rawJson: String) {
+        val parsed = FairPlayTelemetryParser.parse(rawJson, _extensionConfig.value.targetElo) ?: return
+        onFairPlayTelemetry(parsed)
+    }
+
+    fun onFairPlayTelemetry(model: FairPlayTelemetryModel) {
+        _liveAnalysis.update { current ->
+            current.copy(
+                fairPlayStatus = model.toFairPlayStatus(),
+                fairPlayTelemetry = model
+            )
+        }
     }
 
     fun setPracticeHumanDelayMs(delayMs: Int) =
@@ -394,6 +419,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             } else _liveAnalysis.value.fairPlayStatus
 
+            val parsedTelemetry = if (fpObj != null) {
+                parsedFairPlay.toTelemetryModel(
+                    lastSiScore = fpObj.optDouble("lastSiScore", fpObj.optDouble("siScore", 0.0)).toFloat(),
+                    updatedAtMs = fpObj.optLong("updatedAtMs", System.currentTimeMillis())
+                )
+            } else {
+                _liveAnalysis.value.fairPlayTelemetry
+            }
+
             _engineStatus.value = parsedStatus
             _liveAnalysis.value = BrowserAnalysisSnapshot(
                 fen = fen,
@@ -407,7 +441,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 tablebase = parsedTb,
                 boardTheme = parsedTheme,
                 lastMoveAnnotation = parsedAnn,
-                fairPlayStatus = parsedFairPlay
+                fairPlayStatus = parsedFairPlay,
+                fairPlayTelemetry = parsedTelemetry
             )
         } catch (t: Throwable) {
             AppLogger.w(TAG, "Failed parsing browser engine update: ${t.message}")

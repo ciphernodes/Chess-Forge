@@ -96,7 +96,8 @@ class MainActivity : ComponentActivity() {
                     onSelectPreset = viewModel::selectPreset,
                     onNavigateUrl = viewModel::navigateToUrl,
                     onPageStatusChange = viewModel::setEngineStatus,
-                    onWebAnalysisJson = viewModel::onWebAnalysisJson
+                    onWebAnalysisJson = viewModel::onWebAnalysisJson,
+                    onFairPlayTelemetry = viewModel::onFairPlayTelemetry
                 )
             }
         }

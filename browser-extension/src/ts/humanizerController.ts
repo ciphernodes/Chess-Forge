@@ -1,4 +1,8 @@
 import { expectedScoreFromLine, type FairPlayAuditor } from "./fairPlayAuditor.ts";
+import type {
+  FairPlayEventBus,
+  RiskLevelChangedEvent,
+} from "./fairPlayEventBus.ts";
 import {
   computeEffectiveBlunderCapCp,
   computeEloLambda,
@@ -15,6 +19,15 @@ import {
   type OverlayRenderPort,
   type PolicyPort,
 } from "./ports.ts";
+
+export interface HumanizerRiskSubscriptionOptions {
+  /** Explicit opt-in flag; defaults to false for full backward compatibility. */
+  readonly enabled: boolean;
+  /** Elo step-down applied on ELEVATED for remainder of current game (default 200). */
+  readonly elevatedEloStepDown?: number;
+  /** Optional pause-only suppression mode on ELEVATED instead of stepping down Elo. */
+  readonly suppressOnElevated?: boolean;
+}
 
 export type SuppressionReason =
   | "DISABLED"
@@ -49,6 +62,7 @@ export interface WeightedCandidate {
 
 export class HumanizerController {
   private config: HumanizerConfig;
+  private baseTargetElo: number;
   private readonly policyPort: PolicyPort;
   private readonly clockPort: ClockTelemetryPort;
   private readonly overlayPort: OverlayRenderPort;
@@ -58,6 +72,8 @@ export class HumanizerController {
   private activeFen = "";
   private pendingTimer: ReturnType<typeof setTimeout> | null = null;
   private lastDrawTimestampByFen = new Map<string, number>();
+  private unsubscribeRiskBus: (() => void) | null = null;
+  private elevatedSuppressedForGame = false;
 
   constructor(
     config: Partial<HumanizerConfig> = {},
@@ -67,6 +83,7 @@ export class HumanizerController {
     auditor: FairPlayAuditor
   ) {
     this.config = createHumanizerConfig(config);
+    this.baseTargetElo = this.config.targetElo;
     this.policyPort = policyPort;
     this.clockPort = clockPort;
     this.overlayPort = overlayPort;
@@ -79,7 +96,59 @@ export class HumanizerController {
 
   updateConfig(partial: Partial<HumanizerConfig>): void {
     this.config = createHumanizerConfig({ ...this.config, ...partial });
+    if (partial.targetElo !== undefined) {
+      this.baseTargetElo = this.config.targetElo;
+    }
     this.auditor.setBaselineElo(this.config.targetElo);
+  }
+
+  /**
+   * Opt-in subscription to FairPlayAuditor `RiskLevelChanged` events (defaults to `enabled: false`).
+   * - On ELEVATED: steps down Elo (or suppresses hints) for the remainder of the game.
+   * - On LOCKOUT: cancels pending timers immediately and clears all overlays.
+   */
+  subscribeToRiskEvents(
+    eventBus: FairPlayEventBus,
+    options: HumanizerRiskSubscriptionOptions = { enabled: false }
+  ): () => void {
+    this.unsubscribeRiskBus?.();
+    this.unsubscribeRiskBus = null;
+    if (!options.enabled) {
+      return () => {};
+    }
+
+    const stepDown = Math.max(50, options.elevatedEloStepDown ?? 200);
+    const handler = (event: RiskLevelChangedEvent): void => {
+      this.overlayPort.updateFairPlayBadge(event.snapshot);
+      if (event.currentLevel === "LOCKOUT") {
+        this.cancelPending("LOCKOUT");
+        this.overlayPort.clearOverlay("LOCKOUT");
+      } else if (event.currentLevel === "ELEVATED") {
+        if (options.suppressOnElevated) {
+          this.elevatedSuppressedForGame = true;
+          this.cancelPending("ELEVATED");
+          this.overlayPort.clearOverlay("ELEVATED");
+        } else {
+          const steppedElo = Math.max(600, this.baseTargetElo - stepDown);
+          this.config = createHumanizerConfig({
+            ...this.config,
+            targetElo: steppedElo,
+          });
+        }
+      } else if (event.currentLevel === "SAFE") {
+        this.elevatedSuppressedForGame = false;
+        this.config = createHumanizerConfig({
+          ...this.config,
+          targetElo: this.baseTargetElo,
+        });
+      }
+    };
+
+    this.unsubscribeRiskBus = eventBus.onRiskLevelChanged(handler);
+    return () => {
+      this.unsubscribeRiskBus?.();
+      this.unsubscribeRiskBus = null;
+    };
   }
 
   getHintsUsedInGame(): number {
@@ -91,6 +160,19 @@ export class HumanizerController {
     this.hintsUsedInGame = 0;
     this.activeFen = "";
     this.lastDrawTimestampByFen.clear();
+    this.elevatedSuppressedForGame = false;
+    if (this.config.targetElo !== this.baseTargetElo) {
+      this.config = createHumanizerConfig({
+        ...this.config,
+        targetElo: this.baseTargetElo,
+      });
+    }
+  }
+
+  dispose(): void {
+    this.cancelPending("DISPOSED");
+    this.unsubscribeRiskBus?.();
+    this.unsubscribeRiskBus = null;
   }
 
   cancelPending(_reason: string = "FEN_MUTATED_BEFORE_DRAW"): void {
@@ -126,6 +208,11 @@ export class HumanizerController {
     if (policy.blockAllOverlays) {
       this.overlayPort.clearOverlay("LOCKOUT");
       return suppressedDecision("LOCKOUT", 0, 0);
+    }
+
+    if (this.elevatedSuppressedForGame) {
+      this.overlayPort.clearOverlay("ELEVATED");
+      return suppressedDecision("DISABLED", 0, 0);
     }
 
     if (!this.config.enabled) {

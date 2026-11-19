@@ -54,6 +54,67 @@ export interface DispatchedPointerEventRecord {
   readonly timestampMs: number;
 }
 
+export type DominantHandSide = "left" | "right" | "none";
+
+export interface RefinedKinematicProfileConfig {
+  /** Explicit opt-in flag; defaults to false to preserve existing Phase 1/2 behavior. */
+  readonly enabled: boolean;
+  /** Dominant hand/side biasing accumulating motor drift vector across gamePly. */
+  readonly dominantSide: DominantHandSide;
+  /** Accumulated lateral drift magnitude per game ply in CSS pixels (default 0.16 px/ply). */
+  readonly motorDriftPerPlyPx: number;
+  /** Maximum clamp on accumulated motor drift in CSS pixels (default 5.5 px). */
+  readonly motorDriftMaxPx: number;
+  /** High-frequency Perlin/fractal drag-path displacement amplitude bounds (0.5 - 1.5 px). */
+  readonly fractalAmplitudeMinPx: number;
+  readonly fractalAmplitudeMaxPx: number;
+  readonly fractalOctaves: number;
+  /** Post-approach corrective micro-movements before settle (1-3 moves of 2-4 px with 30-60 ms pauses). */
+  readonly correctionMinCount: number;
+  readonly correctionMaxCount: number;
+  readonly correctionMinPx: number;
+  readonly correctionMaxPx: number;
+  readonly correctionPauseMinMs: number;
+  readonly correctionPauseMaxMs: number;
+  /** Additional dwell boost in sharp critical positions (+20 ms at max criticality). */
+  readonly sharpPositionDwellBoostMs: number;
+  readonly sharpCriticalityThreshold: number;
+  /** Micro-double-tap artifact probability on destination square (default 0.02 = 2%). */
+  readonly microDoubleTapProbability: number;
+}
+
+export const DEFAULT_REFINED_KINEMATIC_PROFILE: RefinedKinematicProfileConfig = {
+  enabled: false,
+  dominantSide: "right",
+  motorDriftPerPlyPx: 0.16,
+  motorDriftMaxPx: 5.5,
+  fractalAmplitudeMinPx: 0.5,
+  fractalAmplitudeMaxPx: 1.5,
+  fractalOctaves: 3,
+  correctionMinCount: 1,
+  correctionMaxCount: 3,
+  correctionMinPx: 2,
+  correctionMaxPx: 4,
+  correctionPauseMinMs: 30,
+  correctionPauseMaxMs: 60,
+  sharpPositionDwellBoostMs: 20,
+  sharpCriticalityThreshold: 0.5,
+  microDoubleTapProbability: 0.02,
+};
+
+export interface ExecuteMoveOptions {
+  readonly signal?: AbortSignal;
+  readonly onEventDispatched?: (record: DispatchedPointerEventRecord) => void;
+  /** Interaction mode override for this move (e.g., sampled by InputModeController). */
+  readonly interactionModeOverride?: "drag" | "click";
+  /** Current ply index in the game (drives accumulating motor drift when refined mode enabled). */
+  readonly gamePly?: number;
+  /** Normalized position criticality in [0, 1] (scales contact dwellMs when refined mode enabled). */
+  readonly positionCriticality?: number;
+  /** Optional immediate callback invoked cleanly right upon pointer release (zero buffering). */
+  readonly onImmediatePointerRelease?: (releasedAtMs: number) => void;
+}
+
 export interface PointerExecutionResult {
   readonly executed: boolean;
   readonly aborted: boolean;
@@ -67,17 +128,16 @@ export interface PointerExecutionResult {
   readonly dwellDurationMs: number;
   readonly totalDurationMs: number;
   readonly eventSequence: readonly DispatchedPointerEventRecord[];
+  readonly appliedMotorDrift?: Point2D;
+  readonly correctionMovements?: number;
+  readonly microDoubleTapApplied?: boolean;
+  readonly releasedAtMs?: number;
 }
 
 export interface FrameScheduler {
   waitNextFrame(signal?: AbortSignal): Promise<number>;
   waitMs(ms: number, signal?: AbortSignal): Promise<void>;
   now(): number;
-}
-
-export interface ExecuteMoveOptions {
-  readonly signal?: AbortSignal;
-  readonly onEventDispatched?: (record: DispatchedPointerEventRecord) => void;
 }
 
 export const DEFAULT_KINEMATIC_CONFIG: KinematicExecutorConfig =
@@ -157,15 +217,42 @@ export function computeSquareGeometry(
 }
 
 /**
+ * Computes accumulating motor drift vector across `gamePly` biased toward a dominant side.
+ */
+export function computeAccumulatedMotorDrift(
+  gamePly: number,
+  profile: RefinedKinematicProfileConfig,
+  rng: () => number = Math.random
+): Point2D {
+  if (!profile.enabled || profile.dominantSide === "none" || gamePly <= 0) {
+    return { x: 0, y: 0 };
+  }
+  const sideSign = profile.dominantSide === "right" ? 1 : -1;
+  const rawMag = clamp(
+    gamePly * Math.max(0, profile.motorDriftPerPlyPx),
+    0,
+    Math.max(0, profile.motorDriftMaxPx)
+  );
+  // Subtle organic fluctuation around the dominant-side drift vector
+  const xDrift = sideSign * rawMag * (0.85 + rng() * 0.3);
+  const yDrift = rawMag * 0.38 * (0.7 + rng() * 0.6);
+  return {
+    x: Number(xDrift.toFixed(2)),
+    y: Number(yDrift.toFixed(2)),
+  };
+}
+
+/**
  * Computes jittered pixel coordinates inside a square using 2D Gaussian noise
- * strictly clamped within the inner 60% of the square ([-0.30*sq, +0.30*sq]).
+ * plus optional accumulating motor drift, strictly clamped within the inner square bounds.
  */
 export function computeSquareTargetPoint(
   square: SquareName,
   rect: BoardBoundingRect,
   isFlipped: boolean,
   config: KinematicExecutorConfig = DEFAULT_KINEMATIC_CONFIG,
-  rng: () => number = Math.random
+  rng: () => number = Math.random,
+  motorDrift: Point2D = { x: 0, y: 0 }
 ): Point2D {
   const geom = computeSquareGeometry(square, rect, isFlipped);
   const innerFraction = clamp(config.innerSquareClampFraction, 0.1, 0.6);
@@ -174,12 +261,12 @@ export function computeSquareTargetPoint(
 
   const z = sampleGaussian2D(rng);
   const offsetX = clamp(
-    z.x * config.gaussianJitterSigmaFraction * geom.squareWidth,
+    z.x * config.gaussianJitterSigmaFraction * geom.squareWidth + motorDrift.x,
     -halfSpanX,
     halfSpanX
   );
   const offsetY = clamp(
-    z.y * config.gaussianJitterSigmaFraction * geom.squareHeight,
+    z.y * config.gaussianJitterSigmaFraction * geom.squareHeight + motorDrift.y,
     -halfSpanY,
     halfSpanY
   );
@@ -188,6 +275,40 @@ export function computeSquareTargetPoint(
     x: Number((geom.centerX + offsetX).toFixed(2)),
     y: Number((geom.centerY + offsetY).toFixed(2)),
   };
+}
+
+/**
+ * 1D multi-octave Perlin/value fractal Brownian motion noise in [-1, 1]
+ * using quintic fade curves to break smooth synthetic minimum-jerk kinematics.
+ */
+export function sampleFractalDisplacement1D(
+  t: number,
+  seed: number,
+  octaves: number = 3
+): number {
+  let amplitude = 1.0;
+  let frequency = 5.5;
+  let sum = 0;
+  let norm = 0;
+  const count = clamp(Math.round(octaves), 1, 5);
+
+  for (let o = 0; o < count; o++) {
+    const x = t * frequency + seed + o * 17.31;
+    const x0 = Math.floor(x);
+    const xf = x - x0;
+    const u = xf * xf * xf * (xf * (xf * 6 - 15) + 10);
+    const v0 = Math.sin(x0 * 127.1 + seed * 311.7) * 43758.5453;
+    const v1 = Math.sin((x0 + 1) * 127.1 + seed * 311.7) * 43758.5453;
+    const g0 = (v0 - Math.floor(v0)) * 2 - 1;
+    const g1 = (v1 - Math.floor(v1)) * 2 - 1;
+    const interp = g0 + u * (g1 - g0);
+    sum += interp * amplitude;
+    norm += amplitude;
+    amplitude *= 0.5;
+    frequency *= 2.05;
+  }
+
+  return norm > 0 ? clamp(sum / norm, -1, 1) : 0;
 }
 
 /**
@@ -222,7 +343,8 @@ export function generateCubicBezierTrajectory(
   durationMs: number,
   config: KinematicExecutorConfig,
   rng: () => number = Math.random,
-  stepIntervalMs: number = 16
+  stepIntervalMs: number = 16,
+  refinedProfile?: RefinedKinematicProfileConfig
 ): TrajectoryPlan {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
@@ -286,6 +408,17 @@ export function generateCubicBezierTrajectory(
 
   const tremorPhase = rng() * Math.PI * 2;
   const tremorFreq = 2.5 + rng() * 2.5;
+  const useFractal = Boolean(refinedProfile?.enabled);
+  const fractalSeedA = rng() * 1000;
+  const fractalSeedB = rng() * 1000 + 331;
+  const fractalAmp = useFractal && refinedProfile
+    ? refinedProfile.fractalAmplitudeMinPx +
+      rng() *
+        Math.max(
+          0,
+          refinedProfile.fractalAmplitudeMaxPx - refinedProfile.fractalAmplitudeMinPx
+        )
+    : 0;
   const waypoints: TrajectoryWaypoint[] = [];
 
   for (let i = 0; i <= numSteps; i++) {
@@ -322,9 +455,24 @@ export function generateCubicBezierTrajectory(
     const envelope = Math.sin(Math.PI * tau);
     const tremorNoise = sampleGaussian2D(rng);
     const harmonic = Math.sin(tau * Math.PI * tremorFreq + tremorPhase);
-    const offsetPerp =
+    let offsetPerp =
       envelope * config.microTremorPx * (0.55 * harmonic + 0.45 * tremorNoise.x);
-    const offsetAxial = envelope * config.microTremorPx * 0.3 * tremorNoise.y;
+    let offsetAxial = envelope * config.microTremorPx * 0.3 * tremorNoise.y;
+
+    if (useFractal && refinedProfile) {
+      const fPerp = sampleFractalDisplacement1D(
+        tau,
+        fractalSeedA,
+        refinedProfile.fractalOctaves
+      );
+      const fAxial = sampleFractalDisplacement1D(
+        tau,
+        fractalSeedB,
+        refinedProfile.fractalOctaves
+      );
+      offsetPerp += envelope * fractalAmp * fPerp;
+      offsetAxial += envelope * fractalAmp * 0.7 * fAxial;
+    }
 
     waypoints.push({
       x: Number((basePt.x + nx * offsetPerp + ux * offsetAxial).toFixed(2)),
@@ -430,17 +578,24 @@ export class AbortExecutionError extends Error {
 export class KinematicPointerExecutor {
   private readonly geometryPort: BoardGeometryPort;
   private config: KinematicExecutorConfig;
+  private refinedProfile: RefinedKinematicProfileConfig;
   private readonly scheduler: FrameScheduler;
   private virtualCursor: Point2D | null = null;
   private dispatching = false;
+  private plyCounter = 0;
 
   constructor(
     geometryPort: BoardGeometryPort,
     config: Partial<KinematicExecutorConfig> = {},
-    scheduler?: FrameScheduler
+    scheduler?: FrameScheduler,
+    refinedProfile: Partial<RefinedKinematicProfileConfig> = {}
   ) {
     this.geometryPort = geometryPort;
     this.config = { ...DEFAULT_KINEMATIC_CONFIG, ...config };
+    this.refinedProfile = {
+      ...DEFAULT_REFINED_KINEMATIC_PROFILE,
+      ...refinedProfile,
+    };
     this.scheduler =
       scheduler ?? createDefaultFrameScheduler(this.config.preferAnimationFrame);
   }
@@ -451,6 +606,18 @@ export class KinematicPointerExecutor {
 
   updateConfig(partial: Partial<KinematicExecutorConfig>): void {
     this.config = { ...this.config, ...partial };
+  }
+
+  getRefinedProfile(): RefinedKinematicProfileConfig {
+    return this.refinedProfile;
+  }
+
+  updateRefinedProfile(partial: Partial<RefinedKinematicProfileConfig>): void {
+    this.refinedProfile = { ...this.refinedProfile, ...partial };
+  }
+
+  resetPlyCounter(): void {
+    this.plyCounter = 0;
   }
 
   getVirtualCursor(): Point2D | null {
@@ -511,20 +678,35 @@ export class KinematicPointerExecutor {
     const signal = options.signal;
     const rng = this.config.randomFn ?? Math.random;
     const flipped = this.geometryPort.isFlipped();
+    const activeInteractionMode =
+      options.interactionModeOverride ?? this.config.interactionMode;
+
+    const currentPly = options.gamePly ?? this.plyCounter;
+    if (this.refinedProfile.enabled) {
+      this.plyCounter = currentPly + 1;
+    }
+
+    const motorDrift = computeAccumulatedMotorDrift(
+      currentPly,
+      this.refinedProfile,
+      rng
+    );
 
     const originPoint = computeSquareTargetPoint(
       fromSquare,
       rect,
       flipped,
       this.config,
-      rng
+      rng,
+      motorDrift
     );
     const destinationPoint = computeSquareTargetPoint(
       toSquare,
       rect,
       flipped,
       this.config,
-      rng
+      rng,
+      motorDrift
     );
 
     const startCursor: Point2D = this.virtualCursor ?? {
@@ -555,11 +737,27 @@ export class KinematicPointerExecutor {
       this.config.dragMaxMs,
       rng
     );
-    const dwellDurationMs = sampleDwellDurationMs(
+    let dwellDurationMs = sampleDwellDurationMs(
       this.config.dwellMinMs,
       this.config.dwellMaxMs,
       rng
     );
+
+    // Phase 3: Scale contact dwellMs with positionCriticality (+20 ms in sharp positions)
+    if (this.refinedProfile.enabled) {
+      const crit = clamp(options.positionCriticality ?? 0, 0, 1);
+      if (crit >= this.refinedProfile.sharpCriticalityThreshold) {
+        const sharpnessRatio = clamp(
+          (crit - this.refinedProfile.sharpCriticalityThreshold) /
+            Math.max(0.01, 1 - this.refinedProfile.sharpCriticalityThreshold),
+          0.35,
+          1.0
+        );
+        dwellDurationMs += Math.round(
+          this.refinedProfile.sharpPositionDwellBoostMs * sharpnessRatio
+        );
+      }
+    }
 
     const eventSequence: DispatchedPointerEventRecord[] = [];
     const emitEvent = (
@@ -596,9 +794,68 @@ export class KinematicPointerExecutor {
       );
     };
 
+    const runCorrectionPhase = async (
+      anchorPoint: Point2D,
+      square: SquareName,
+      fallbackTarget: Element,
+      buttons: number
+    ): Promise<number> => {
+      if (!this.refinedProfile.enabled) return 0;
+      const minC = Math.max(1, Math.round(this.refinedProfile.correctionMinCount));
+      const maxC = Math.max(minC, Math.round(this.refinedProfile.correctionMaxCount));
+      const count = minC + Math.floor(rng() * (maxC - minC + 1));
+      let curOffsetPt: Point2D = {
+        x: anchorPoint.x + (rng() < 0.5 ? -1 : 1) * (this.refinedProfile.correctionMinPx + rng() * (this.refinedProfile.correctionMaxPx - this.refinedProfile.correctionMinPx)),
+        y: anchorPoint.y + (rng() < 0.5 ? -1 : 1) * (this.refinedProfile.correctionMinPx + rng() * (this.refinedProfile.correctionMaxPx - this.refinedProfile.correctionMinPx)),
+      };
+
+      for (let step = 0; step < count; step++) {
+        checkAborted(signal);
+        const progressToTarget = (step + 1) / count;
+        const nextPt: Point2D =
+          step === count - 1
+            ? anchorPoint
+            : {
+                x: Number(
+                  (
+                    curOffsetPt.x +
+                    (anchorPoint.x - curOffsetPt.x) * progressToTarget +
+                    (rng() - 0.5) * 2.2
+                  ).toFixed(2)
+                ),
+                y: Number(
+                  (
+                    curOffsetPt.y +
+                    (anchorPoint.y - curOffsetPt.y) * progressToTarget +
+                    (rng() - 0.5) * 2.2
+                  ).toFixed(2)
+                ),
+              };
+        const target = resolveTarget(square, nextPt) ?? fallbackTarget;
+        emitEvent(target, "pointermove", nextPt, buttons, 0);
+        emitEvent(target, "mousemove", nextPt, buttons, 0);
+        curOffsetPt = nextPt;
+
+        const pauseMs = Math.round(
+          this.refinedProfile.correctionPauseMinMs +
+            rng() *
+              Math.max(
+                0,
+                this.refinedProfile.correctionPauseMaxMs -
+                  this.refinedProfile.correctionPauseMinMs
+              )
+        );
+        await this.scheduler.waitMs(pauseMs, signal);
+      }
+      return count;
+    };
+
     const startedAt = this.scheduler.now();
     let pointerIsDown = false;
     let activeDownTarget: Element | null = null;
+    let correctionMovements = 0;
+    let microDoubleTapApplied = false;
+    let releasedAtMs = 0;
     this.dispatching = true;
 
     try {
@@ -633,7 +890,9 @@ export class KinematicPointerExecutor {
         originPoint,
         approachDurationMs,
         this.config,
-        rng
+        rng,
+        16,
+        this.refinedProfile
       );
       await this.followPlan(
         approachPlan,
@@ -645,6 +904,14 @@ export class KinematicPointerExecutor {
         signal
       );
 
+      // Post-approach micro-corrections (1-3 steps of 2-4 px with 30-60 ms pauses) before settle
+      correctionMovements += await runCorrectionPhase(
+        originPoint,
+        fromSquare,
+        originTarget,
+        0
+      );
+
       checkAborted(signal);
 
       // 2. Press on origin square
@@ -654,21 +921,23 @@ export class KinematicPointerExecutor {
       emitEvent(pressTarget, "mousedown", originPoint, 1, 0);
       pointerIsDown = true;
 
-      if (this.config.interactionMode === "click") {
-        // First click dwell (40..110 ms) before release
+      if (activeInteractionMode === "click") {
+        // First click dwell before release
         await this.scheduler.waitMs(dwellDurationMs, signal);
         emitEvent(pressTarget, "pointerup", originPoint, 0, 0);
         emitEvent(pressTarget, "mouseup", originPoint, 0, 0);
         emitEvent(pressTarget, "click", originPoint, 0, 0);
         pointerIsDown = false;
 
-        // Move to destination square along Bézier trajectory
+        // Move to destination square along Bézier + fractal trajectory
         const travelPlan = generateCubicBezierTrajectory(
           originPoint,
           destinationPoint,
           dragDurationMs,
           this.config,
-          rng
+          rng,
+          16,
+          this.refinedProfile
         );
         await this.followPlan(
           travelPlan,
@@ -680,6 +949,13 @@ export class KinematicPointerExecutor {
           signal
         );
 
+        correctionMovements += await runCorrectionPhase(
+          destinationPoint,
+          toSquare,
+          pressTarget,
+          0
+        );
+
         const destTarget = resolveTarget(toSquare, destinationPoint) ?? pressTarget;
         emitEvent(destTarget, "pointerover", destinationPoint, 0, 0);
         emitEvent(destTarget, "pointerenter", destinationPoint, 0, 0);
@@ -687,18 +963,34 @@ export class KinematicPointerExecutor {
         emitEvent(destTarget, "mousedown", destinationPoint, 1, 0);
         pointerIsDown = true;
 
-        const destDwell = sampleDwellDurationMs(
-          this.config.dwellMinMs,
-          this.config.dwellMaxMs,
-          rng
-        );
+        const destDwell =
+          sampleDwellDurationMs(this.config.dwellMinMs, this.config.dwellMaxMs, rng) +
+          (this.refinedProfile.enabled &&
+          (options.positionCriticality ?? 0) >= this.refinedProfile.sharpCriticalityThreshold
+            ? Math.round(this.refinedProfile.sharpPositionDwellBoostMs * 0.5)
+            : 0);
         await this.scheduler.waitMs(destDwell, signal);
         emitEvent(destTarget, "pointerup", destinationPoint, 0, 0);
         emitEvent(destTarget, "mouseup", destinationPoint, 0, 0);
         emitEvent(destTarget, "click", destinationPoint, 0, 0);
         pointerIsDown = false;
+        releasedAtMs = Math.round(this.scheduler.now());
+        options.onImmediatePointerRelease?.(releasedAtMs);
+
+        if (
+          this.refinedProfile.enabled &&
+          rng() < this.refinedProfile.microDoubleTapProbability
+        ) {
+          microDoubleTapApplied = true;
+          await this.scheduler.waitMs(32 + Math.round(rng() * 20), signal);
+          emitEvent(destTarget, "pointerdown", destinationPoint, 1, 0);
+          emitEvent(destTarget, "mousedown", destinationPoint, 1, 0);
+          emitEvent(destTarget, "pointerup", destinationPoint, 0, 0);
+          emitEvent(destTarget, "mouseup", destinationPoint, 0, 0);
+          emitEvent(destTarget, "click", destinationPoint, 0, 0);
+        }
       } else {
-        // Drag mode: brief grip dwell, drag Bézier steps with buttons=1, settle dwell, release + click
+        // Drag mode: brief grip dwell, drag Bézier + fractal steps with buttons=1, settle, immediate release
         const gripDwellMs = clamp(Math.round(dwellDurationMs * 0.55), 40, 75);
         await this.scheduler.waitMs(gripDwellMs, signal);
 
@@ -707,7 +999,9 @@ export class KinematicPointerExecutor {
           destinationPoint,
           dragDurationMs,
           this.config,
-          rng
+          rng,
+          16,
+          this.refinedProfile
         );
         await this.followPlan(
           dragPlan,
@@ -719,6 +1013,13 @@ export class KinematicPointerExecutor {
           signal
         );
 
+        correctionMovements += await runCorrectionPhase(
+          destinationPoint,
+          toSquare,
+          pressTarget,
+          1
+        );
+
         checkAborted(signal);
         const destTarget = resolveTarget(toSquare, destinationPoint) ?? pressTarget;
         emitEvent(destTarget, "pointerover", destinationPoint, 1, 0);
@@ -726,12 +1027,27 @@ export class KinematicPointerExecutor {
         emitEvent(destTarget, "mouseover", destinationPoint, 1, 0);
         emitEvent(destTarget, "mouseenter", destinationPoint, 1, 0);
 
-        // Natural target acquisition dwell before releasing piece (40..110 ms)
+        // Natural target acquisition dwell before releasing piece
         await this.scheduler.waitMs(dwellDurationMs, signal);
         emitEvent(destTarget, "pointerup", destinationPoint, 0, 0);
         emitEvent(destTarget, "mouseup", destinationPoint, 0, 0);
         emitEvent(destTarget, "click", destinationPoint, 0, 0);
         pointerIsDown = false;
+        releasedAtMs = Math.round(this.scheduler.now());
+        options.onImmediatePointerRelease?.(releasedAtMs);
+
+        if (
+          this.refinedProfile.enabled &&
+          rng() < this.refinedProfile.microDoubleTapProbability
+        ) {
+          microDoubleTapApplied = true;
+          await this.scheduler.waitMs(32 + Math.round(rng() * 20), signal);
+          emitEvent(destTarget, "pointerdown", destinationPoint, 1, 0);
+          emitEvent(destTarget, "mousedown", destinationPoint, 1, 0);
+          emitEvent(destTarget, "pointerup", destinationPoint, 0, 0);
+          emitEvent(destTarget, "mouseup", destinationPoint, 0, 0);
+          emitEvent(destTarget, "click", destinationPoint, 0, 0);
+        }
       }
 
       const totalDurationMs = Math.max(
@@ -751,6 +1067,10 @@ export class KinematicPointerExecutor {
         dwellDurationMs,
         totalDurationMs,
         eventSequence,
+        appliedMotorDrift: motorDrift,
+        correctionMovements,
+        microDoubleTapApplied,
+        releasedAtMs,
       };
     } catch (err) {
       if (pointerIsDown && activeDownTarget) {

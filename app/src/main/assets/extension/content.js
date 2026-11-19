@@ -99,10 +99,11 @@
       return;
     }
     try {
-      chrome.storage.local.get(Object.assign({}, DEFAULT_CONFIG, { chessForgeFairPlayWindowV1: null }), (stored) => {
-        if (stored && stored.chessForgeFairPlayWindowV1 && Array.isArray(stored.chessForgeFairPlayWindowV1.games)) {
-          fairPlayState.windowGames = stored.chessForgeFairPlayWindowV1.games.slice(-20);
-        }
+      // Remove any legacy plaintext FairPlay telemetry from chrome.storage.local
+      if (typeof chrome.storage.local.remove === "function") {
+        chrome.storage.local.remove("chessForgeFairPlayWindowV1");
+      }
+      chrome.storage.local.get(Object.assign({}, DEFAULT_CONFIG), (stored) => {
         config = Object.assign({}, DEFAULT_CONFIG, stored || {});
         cb();
       });
@@ -483,12 +484,28 @@
   }
 
   function ensureOverlayUi() {
-    if (overlayHost && document.body.contains(overlayHost)) return;
+    const mountRoot = document.documentElement;
+    if (!mountRoot) return;
+    if (overlayHost && mountRoot.contains(overlayHost)) return;
 
     overlayHost = document.createElement("div");
     overlayHost.id = "chess-forge-extension-overlay";
     overlayHost.style.cssText =
       "position:fixed;inset:0;pointer-events:none;z-index:2147483640;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;";
+
+    let shadowContainer = overlayHost;
+    if (typeof overlayHost.attachShadow === "function") {
+      const closedRoot = overlayHost.attachShadow({ mode: "closed" });
+      if (typeof CSSStyleSheet !== "undefined" && Array.isArray(closedRoot.adoptedStyleSheets)) {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync(
+          ":host{all:initial;position:fixed;inset:0;pointer-events:none;z-index:2147483640;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;}" +
+          "svg{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;}"
+        );
+        closedRoot.adoptedStyleSheets = [sheet];
+      }
+      shadowContainer = closedRoot;
+    }
 
     svgLayer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svgLayer.style.cssText = "position:fixed;inset:0;width:100%;height:100%;pointer-events:none;";
@@ -579,14 +596,14 @@
 
     fabPill.appendChild(toggleBtn);
     fabPill.appendChild(sideBtn);
-    overlayHost.appendChild(svgLayer);
-    overlayHost.appendChild(evalBarEl);
-    overlayHost.appendChild(hudPill);
-    overlayHost.appendChild(bookBannerEl);
-    overlayHost.appendChild(tablebaseBannerEl);
-    overlayHost.appendChild(fairPlayPill);
-    overlayHost.appendChild(fabPill);
-    document.body.appendChild(overlayHost);
+    shadowContainer.appendChild(svgLayer);
+    shadowContainer.appendChild(evalBarEl);
+    shadowContainer.appendChild(hudPill);
+    shadowContainer.appendChild(bookBannerEl);
+    shadowContainer.appendChild(tablebaseBannerEl);
+    shadowContainer.appendChild(fairPlayPill);
+    shadowContainer.appendChild(fabPill);
+    mountRoot.appendChild(overlayHost);
   }
 
   function clearOverlayVisuals() {
@@ -1209,8 +1226,8 @@
     return enrichResult(fen, turn, raw);
   }
 
-  // --- HumanizerController & FairPlayAuditor Runtime Bridge ---
-  const FAIR_PLAY_KEY = "chessForgeFairPlayWindowV1";
+  // --- HumanizerController & FairPlayAuditor Runtime Bridge (In-Memory 5-Game Window) ---
+  const FAIR_PLAY_ROLLING_GAMES = 5;
   const fairPlayState = {
     windowGames: [],
     currentMoves: [],
@@ -1528,9 +1545,9 @@
     fairPlayState.currentMoves = [];
     fairPlayState.lockedOut = false;
     fairPlayState.lockoutReason = null;
-    if (hasChromeStorage()) {
+    if (hasChromeStorage() && typeof chrome.storage.local.remove === "function") {
       try {
-        chrome.storage.local.remove(FAIR_PLAY_KEY);
+        chrome.storage.local.remove("cfEncryptedBreakerV1");
       } catch (_) {}
     }
     const snap = recomputeFairPlaySnapshot();
@@ -1547,6 +1564,22 @@
 
   window.__ChessForgeHumanizer = {
     getSnapshot: () => fairPlayState.lastSnapshot,
+    finishGame: () => {
+      if (fairPlayState.currentMoves.length > 0) {
+        const snap = fairPlayState.lastSnapshot;
+        fairPlayState.windowGames = fairPlayState.windowGames.concat([
+          {
+            moveCount: fairPlayState.currentMoves.length,
+            acpl: snap.acpl,
+            meanPartialCredit: snap.meanPartialCredit
+          }
+        ]).slice(-FAIR_PLAY_ROLLING_GAMES);
+      }
+      hintsUsedInGame = 0;
+      shownHintFens.clear();
+      fairPlayState.currentMoves = [];
+      return recomputeFairPlaySnapshot();
+    },
     resetGame: () => {
       hintsUsedInGame = 0;
       shownHintFens.clear();
@@ -1778,7 +1811,7 @@
     ensureOverlayUi();
     if (observer) observer.disconnect();
     observer = new MutationObserver(() => scheduleAnalysis(100));
-    observer.observe(document.body, {
+    observer.observe(document.documentElement || document.body, {
       childList: true,
       subtree: true,
       attributes: true,

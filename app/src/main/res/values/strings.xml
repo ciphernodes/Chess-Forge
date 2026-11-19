@@ -8,4 +8,5 @@
     <string name="btn_share_zip">Share to Browser</string>
     <string name="btn_open_browser">Test in Browser</string>
     <string name="cd_hero_banner">Chess Forge browser extension illustration</string>
+    <string name="accessibility_service_description">Optional motor-accessibility gesture dispatcher for stroking verified board coordinates on top of Chrome.</string>
 </resources>

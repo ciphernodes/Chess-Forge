@@ -65,6 +65,7 @@
         "src/syzygy-tablebase.js",
         "src/content.js"
       ],
+      "world": "ISOLATED",
       "run_at": "document_idle"
     }
   ]
