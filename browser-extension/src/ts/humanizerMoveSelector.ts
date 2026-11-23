@@ -39,6 +39,7 @@ export type SelectionRegime =
   | "CRITICAL_BOLTZMANN_TOP3"
   | "FORCED_RECAPTURE_EXCEPTION"
   | "LOW_CLOCK_BLUNDER_INJECTION"
+  | "PANIC_THROW_SUBOPTIMAL"
   | "NO_CANDIDATE";
 
 export type HumanPriorSource = "ONNX_MAIA2" | "SUPPLIED" | "HEURISTIC_FALLBACK";
@@ -111,6 +112,8 @@ export interface MoveSelectionRequest {
   readonly effectiveTargetEloOverride?: number;
   readonly temperatureMultiplierOverride?: number;
   readonly blunderCapAddCpOverride?: number;
+  /** When true (panic/reset mode active), deliberately selects suboptimal moves to miss tactics and lose gracefully. */
+  readonly panicModeActive?: boolean;
 }
 
 export interface MoveSelectionResult {
@@ -609,6 +612,56 @@ export class HumanizerMoveSelector {
           }
         }
       }
+    }
+
+    // Opt-in panic/reset suboptimal throw mode: deliberately miss tactics / favor high-cpLoss candidates
+    if (request.panicModeActive && rawLines.length > 1) {
+      const throwPool = rawLines.slice(1);
+      const maxThrowCpLoss = Math.max(
+        1,
+        ...throwPool.map((line) => Math.max(10, bestCp - lineToComparableCp(line)))
+      );
+      const throwWeights = throwPool.map((line) => {
+        const cpLoss = Math.max(10, bestCp - lineToComparableCp(line));
+        const prior = Math.max(1e-3, resolvedPrior(line.move));
+        // Favor higher cpLoss (missing best tactic / sacrificing material) weighted with human plausibility
+        return Math.pow(cpLoss / maxThrowCpLoss, 1.35) * (0.4 + 0.6 * prior);
+      });
+      const throwSum = throwWeights.reduce((acc, w) => acc + w, 0) || 1;
+      const panicDist: MoveCandidateProbability[] = throwPool
+        .map((line, idx) => {
+          const wdl = normalizeWdlTriple(line);
+          const cpLoss = Math.max(0, bestCp - lineToComparableCp(line));
+          const prior = Math.max(1e-4, resolvedPrior(line.move));
+          return {
+            line,
+            wdl,
+            expectedScore: computeExpectedScore(wdl),
+            cpLoss,
+            humanPrior: prior,
+            utility: Math.log(prior) + 0.004 * cpLoss,
+            probability: throwWeights[idx] / throwSum,
+          };
+        })
+        .sort((a, b) => b.probability - a.probability);
+      const panicRng = this.config.randomFn ?? Math.random;
+      const picked = sampleFromDistribution(panicDist, panicRng);
+      return {
+        selected: picked,
+        distribution: panicDist,
+        excludedBlunderMoves: [],
+        excludedComputerTactics: [],
+        recaptureExceptionApplied: false,
+        expectedScoreDelta: Number(expectedScoreDelta.toFixed(4)),
+        isCriticalPosition: isCritical,
+        regime: "PANIC_THROW_SUBOPTIMAL",
+        temperatureUsed: Number(temperature.toFixed(4)),
+        lambdaUsed: Number(lambda.toFixed(5)),
+        effectiveBlunderCapCp: blunderCap,
+        searchBudget,
+        priorSource: resolvedPriorSource,
+        lowClockBlunderInjected: false,
+      };
     }
 
     const excludedBlunderMoves: string[] = [];

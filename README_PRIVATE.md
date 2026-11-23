@@ -16,18 +16,18 @@ All behavioral, kinematic, watchdog, OS input, and update-verification modules a
 
 2. **Phase 2 — Maia-2 Policy, Behavioral Modeling & Monotonic Clocks**
    - **`humanizerMoveSelector.ts` & `openingPreferenceMatrix.ts`**: Wires `OnnxPolicyRunner` (Maia-2 ONNX) directly without synthetic priors when loaded; applies rating-specific opening matrices (1200/1600/2000) and gradual rating calibration (`userCurrentRating + 50`, 100-game ramp, `<300` Elo clamp).
-   - **`behavioralStateMachine.ts`**: Mixes `crypto.getRandomValues()` session entropy with sinusoidal fatigue, randomizes Stockfish hash `±10%`, models tilt (`-200` Elo for 10 moves after 2 blunders in 5 moves) / confidence bursts, and supports panic/reset shortcuts.
-   - **`clockAndSessionManager.ts`**: Tracks move elapsed time strictly via `performance.now()`, models increment vs non-increment low-clock pacing, circadian/opponent-rating scaling, and `30g/4h/2h` session caps.
+   - **`behavioralStateMachine.ts` & `humanizerMoveSelector.ts`**: Mixes `crypto.getRandomValues()` session entropy with sinusoidal fatigue, randomizes Stockfish hash `±10%`, models tilt (`-200` Elo for 10 moves after 2 blunders in 5 moves) / confidence bursts, and supports panic/reset shortcuts (`PANIC_THROW_SUBOPTIMAL` throw mode + immediate telemetry clear).
+   - **`clockAndSessionManager.ts`**: Tracks move elapsed time strictly via `performance.now()`, models increment vs non-increment low-clock pacing, circadian/opponent-rating scaling, `30g/4h/2h` session caps, and post-game analysis board auto-open / scroll simulation (`autoOpenAnalysisBoard: false` default).
 
 3. **Phase 3 — Refined HCI Kinematics, Input Modes & Watchdogs**
    - **`kinematicPointerExecutor.ts`**: Adds accumulating dominant-side motor drift across `gamePly`, Perlin/fractal drag displacement (`0.5–1.5 px`), post-approach micro-corrections (`1–3` moves, `30–60 ms` pauses), criticality dwell boost (`+20 ms`), and `2%` destination micro-double-tap after pre-movement think delays.
    - **`inputModeController.ts` & `promotionHandler.ts`**: Samples `70% click / 30% drag` shifting toward clicks under time pressure; supports Lichess premoves (`1200: 30%`, `1600: 10%`, `2000: 5%` miss/fallback) and Lichess `#promotion-choice` / Chess.com auto-queen handling with `200–400 ms` recognition pauses and `2%` non-losing rook underpromotions at 1200 Elo.
    - **`environmentWatchdog.ts`**: Monitors `document.hidden`, `visibilityState`, and WebSocket status; pauses immediately with `TAB_FOCUS_ALERT` and resumes only after verified dual-source parity on the user's turn.
 
-4. **Phase 4 — OS Trusted Input, Android Bridge & Signed Rollouts**
+4. **Phase 4 — OS Trusted Input, Android Bridge, Signed Encrypted Rollouts & Repo Hygiene**
    - **`desktopInputDrivers.ts` & `native-host/native_input_host.go`**: Dispatches Bézier trajectories via Chrome DevTools Protocol (`chrome.debugger` `Input.dispatchMouseEvent`) or Chrome Native Messaging to Windows `SendInput()` (`MOUSEEVENTF_MOVE`).
    - **`ChessForgeAndroidBridge.kt` & `FairPlayStatusIndicator.kt`**: Exposes `AccessibilityDispatcher` (`GestureDescription`), `@JavascriptInterface onFairPlayTelemetry` (`FairPlayTelemetryModel`), live `S_i` spikes / IPR Z-score / ACPL UI rendering in `BrowserTabScreen`, and WebView UA + `chrome.runtime`/`chrome.storage` polyfills while defaulting to `NATIVE_ACCESSIBILITY_OVERLAY`.
-   - **`updateVerifier.ts`**: Cryptographic update manifest verifier (`ECDSA-P256-SHA256` / `Ed25519` + SHA-256), key rotation (`active` / `grace` / `revoked`), rollback protection, and deterministic canary cohort bucketing.
+   - **`updateVerifier.ts` & `scripts/export-public-fork.sh`**: Cryptographic update manifest verifier (`ECDSA-P256-SHA256` / `Ed25519` + SHA-256), `AES-256-GCM` encrypted update payload decryption (`encryptUpdatePayload` / `verifyAndDecryptUpdate`), key rotation (`active` / `grace` / `revoked`), rollback protection, deterministic canary cohort bucketing, and non-destructive public fork export script.
 
 ---
 
@@ -44,7 +44,7 @@ All behavioral, kinematic, watchdog, OS input, and update-verification modules a
 | `GradualRatingCalibrator` | `config.enabled` | `false` | Enables smooth 100-game `+50` Elo ramp calibration |
 | `BehavioralStateMachine` | `config.enabled` | `false` | Enables sinusoidal fatigue, `±10%` hash entropy, and tilt state |
 | `MonotonicClockTracker` | `config.enabled` | `false` | Enables `performance.now()` pacing independent of spoofed DOM clocks |
-| `SessionPacingManager` | `config.enabled` | `false` | Enables session caps, circadian scaling, and cooldown gates |
+| `SessionPacingManager` | `config.enabled` / `autoOpenAnalysisBoard` | `false` | Enables session caps, circadian scaling, cooldown gates & post-game analysis scroll |
 | `RefinedKinematicProfileConfig` | `refinedProfile.enabled` | `false` | Enables dominant-side motor drift, fractal noise, corrections & double-tap |
 | `InputModeController` | `config.enabled` | `false` | Enables `70/30` click/drag sampling & rating-calibrated premoves |
 | `PromotionHandler` | `config.enabled` | `false` | Enables promotion dialog wait + 2% novice rook underpromotion |

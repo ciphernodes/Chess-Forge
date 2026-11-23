@@ -887,6 +887,7 @@ export class AutoPlayOrchestrator {
               temperatureMultiplierOverride:
                 behavioralProfile?.temperatureMultiplier,
               blunderCapAddCpOverride: behavioralProfile?.blunderCapAddCp,
+              panicModeActive: behavioralProfile?.isPanicMode,
             }
           : {}),
       };

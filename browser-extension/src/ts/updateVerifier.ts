@@ -82,7 +82,19 @@ export type UpdateVerificationRejectionCode =
   | "ALGORITHM_MISMATCH"
   | "INVALID_SIGNATURE"
   | "ARTIFACT_DIGEST_MISMATCH"
+  | "PAYLOAD_DECRYPTION_FAILED"
   | "NOT_IN_CANARY_COHORT";
+
+export interface EncryptedUpdateBundle {
+  readonly alg: "AES-256-GCM";
+  readonly keyId: string;
+  readonly ivBase64: string;
+  readonly ciphertextBase64: string;
+}
+
+export interface DecryptedUpdateVerificationResult extends UpdateVerificationResult {
+  readonly decryptedArtifactBytes: Uint8Array | null;
+}
 
 export interface UpdateVerificationResult {
   readonly accepted: boolean;
@@ -265,6 +277,82 @@ export async function verifyManifestCryptoSignature(
     ["verify"]
   );
   return subtle.verify({ name: "Ed25519" }, cryptoKey, sigBytes, msgBuf);
+}
+
+/**
+ * Encrypts an update payload using AES-256-GCM bound to releaseId AAD.
+ */
+export async function encryptUpdatePayload(
+  plaintext: Uint8Array | string,
+  rawAes256Key: Uint8Array,
+  releaseId: string,
+  keyId: string = "aes-active-1"
+): Promise<EncryptedUpdateBundle> {
+  const subtle = getSubtleCrypto();
+  const keyBuf = new ArrayBuffer(rawAes256Key.byteLength);
+  new Uint8Array(keyBuf).set(rawAes256Key);
+  const cryptoKey = await subtle.importKey(
+    "raw",
+    keyBuf,
+    { name: "AES-GCM" },
+    false,
+    ["encrypt"]
+  );
+
+  const iv = new Uint8Array(12);
+  globalThis.crypto.getRandomValues(iv);
+  const plainBytes =
+    typeof plaintext === "string"
+      ? new TextEncoder().encode(plaintext)
+      : plaintext;
+  const plainBuf = new ArrayBuffer(plainBytes.byteLength);
+  new Uint8Array(plainBuf).set(plainBytes);
+  const aad = new TextEncoder().encode(releaseId);
+
+  const cipherBuf = await subtle.encrypt(
+    { name: "AES-GCM", iv, additionalData: aad },
+    cryptoKey,
+    plainBuf
+  );
+  return {
+    alg: "AES-256-GCM",
+    keyId,
+    ivBase64: uint8ArrayToBase64(iv),
+    ciphertextBase64: uint8ArrayToBase64(new Uint8Array(cipherBuf)),
+  };
+}
+
+/**
+ * Decrypts an AES-256-GCM encrypted update payload bundle bound to manifest releaseId.
+ */
+export async function decryptUpdatePayload(
+  bundle: EncryptedUpdateBundle,
+  rawAes256Key: Uint8Array,
+  releaseId: string
+): Promise<Uint8Array> {
+  if (bundle.alg !== "AES-256-GCM") {
+    throw new Error(`Unsupported encryption algorithm: ${bundle.alg}`);
+  }
+  const subtle = getSubtleCrypto();
+  const keyBuf = new ArrayBuffer(rawAes256Key.byteLength);
+  new Uint8Array(keyBuf).set(rawAes256Key);
+  const cryptoKey = await subtle.importKey(
+    "raw",
+    keyBuf,
+    { name: "AES-GCM" },
+    false,
+    ["decrypt"]
+  );
+
+  const iv = base64ToUint8Array(bundle.ivBase64);
+  const cipherBytes = base64ToUint8Array(bundle.ciphertextBase64);
+  const aad = new TextEncoder().encode(releaseId);
+  const plainBuf = await subtle.decrypt(
+    { name: "AES-GCM", iv, additionalData: aad },
+    cryptoKey,
+    cipherBytes
+  );
+  return new Uint8Array(plainBuf);
 }
 
 export class UpdateManifestVerifier {
@@ -463,6 +551,68 @@ export class UpdateManifestVerifier {
       detail: usedGraceKey
         ? `Verified via rotating grace key '${key.keyId}'`
         : `Verified via active key '${key.keyId}'`,
+    };
+  }
+
+  /**
+   * Decrypts an AES-256-GCM encrypted update payload bundle and verifies signature,
+   * SHA-256 digest, key rotation status, rollback bounds, and canary cohort eligibility.
+   */
+  async verifyAndDecryptUpdate(
+    manifest: SignedUpdateManifest,
+    encryptedBundle: EncryptedUpdateBundle,
+    rawAes256Key: Uint8Array
+  ): Promise<DecryptedUpdateVerificationResult> {
+    if (!this.config.enabled) {
+      return {
+        accepted: false,
+        verifiedSignature: false,
+        verifiedArtifactDigest: false,
+        eligibleForRollout: false,
+        usedGraceKey: false,
+        keyId: manifest.keyId,
+        cohortBucketBps: computeCanaryBucketBps(
+          this.config.installId,
+          manifest.releaseId
+        ),
+        reasonCode: "VERIFIER_DISABLED",
+        detail: "Update verification is disabled (opt-in required)",
+        decryptedArtifactBytes: null,
+      };
+    }
+
+    let decrypted: Uint8Array;
+    try {
+      decrypted = await decryptUpdatePayload(
+        encryptedBundle,
+        rawAes256Key,
+        manifest.releaseId
+      );
+    } catch (err) {
+      return {
+        accepted: false,
+        verifiedSignature: false,
+        verifiedArtifactDigest: false,
+        eligibleForRollout: false,
+        usedGraceKey: false,
+        keyId: manifest.keyId,
+        cohortBucketBps: computeCanaryBucketBps(
+          this.config.installId,
+          manifest.releaseId
+        ),
+        reasonCode: "PAYLOAD_DECRYPTION_FAILED",
+        detail:
+          err instanceof Error
+            ? `Encrypted update payload decryption failed: ${err.message}`
+            : "Encrypted update payload decryption failed",
+        decryptedArtifactBytes: null,
+      };
+    }
+
+    const baseRes = await this.verifyUpdate(manifest, decrypted);
+    return {
+      ...baseRes,
+      decryptedArtifactBytes: baseRes.accepted ? decrypted : null,
     };
   }
 }

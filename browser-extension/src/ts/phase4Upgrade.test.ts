@@ -18,6 +18,7 @@ import {
   UpdateManifestVerifier,
   buildCanonicalManifestSigningString,
   computeCanaryBucketBps,
+  encryptUpdatePayload,
   sha256Hex,
   uint8ArrayToBase64,
   type SignedUpdateManifest,
@@ -368,4 +369,36 @@ test("UpdateManifestVerifier defaults to enabled: false, verifies ECDSA signatur
   const canaryMiss = await outCohortVerifier.verifyUpdate(m2, artifact);
   assert.equal(canaryMiss.accepted, false);
   assert.equal(canaryMiss.reasonCode, "NOT_IN_CANARY_COHORT");
+
+  // Encrypted AES-256-GCM update payload round-trip + tamper rejection
+  const aesKey = new Uint8Array(32);
+  globalThis.crypto.getRandomValues(aesKey);
+  const encryptedBundle = await encryptUpdatePayload(artifact, aesKey, m1.releaseId);
+
+  // Restore active key1 on verifier for encrypted bundle test
+  verifier.rotateTrustedKeys(keys);
+  const decOk = await verifier.verifyAndDecryptUpdate(m1, encryptedBundle, aesKey);
+  assert.equal(decOk.accepted, true);
+  assert.equal(decOk.verifiedSignature, true);
+  assert.equal(decOk.verifiedArtifactDigest, true);
+  assert.equal(
+    new TextDecoder().decode(decOk.decryptedArtifactBytes ?? new Uint8Array()),
+    "chessforge-bundle-2.2.0-bytes"
+  );
+
+  // Wrong AES key rejects with PAYLOAD_DECRYPTION_FAILED
+  const wrongKey = new Uint8Array(32).fill(7);
+  const decFail = await verifier.verifyAndDecryptUpdate(m1, encryptedBundle, wrongKey);
+  assert.equal(decFail.accepted, false);
+  assert.equal(decFail.reasonCode, "PAYLOAD_DECRYPTION_FAILED");
+  assert.equal(decFail.decryptedArtifactBytes, null);
+
+  // Disabled verifier refuses decryption
+  const disabledEncRes = await disabledVerifier.verifyAndDecryptUpdate(
+    m1,
+    encryptedBundle,
+    aesKey
+  );
+  assert.equal(disabledEncRes.accepted, false);
+  assert.equal(disabledEncRes.reasonCode, "VERIFIER_DISABLED");
 });

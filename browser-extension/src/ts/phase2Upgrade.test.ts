@@ -720,5 +720,55 @@ test("AutoPlayOrchestrator integrates Phase 2 ONNX, Tilt/Calibration, MonotonicC
   assert.equal(skipped.status, "SKIPPED");
   assert.equal(skipped.reason, "SESSION_COOLDOWN_ACTIVE");
 
+  // Panic mode forces PANIC_THROW_SUBOPTIMAL suboptimal move selection
+  const panicSelector = new HumanizerMoveSelector({
+    targetElo: 2000,
+    maxAllowedBlunderCp: 60,
+    randomFn: () => 0.1,
+  });
+  const panicRes = panicSelector.selectMove({
+    fen: START_FEN,
+    turn: "w",
+    panicModeActive: true,
+    lines: [
+      { rank: 1, move: "e2e4", san: "e4", centipawns: 90, depth: 16, wdl: [540, 320, 140] },
+      { rank: 2, move: "d2d4", san: "d4", centipawns: 10, depth: 16, wdl: [400, 390, 210] },
+      { rank: 3, move: "a2a3", san: "a3", centipawns: -220, depth: 16, wdl: [140, 240, 620] },
+    ],
+  });
+  assert.equal(panicRes.regime, "PANIC_THROW_SUBOPTIMAL");
+  assert.notEqual(panicRes.selected?.line.move, "e2e4");
+
+  // Post-game analysis board auto-open & scroll simulation
+  const openedUrls: string[] = [];
+  const scrolledPlies: number[] = [];
+  const reviewManager = new SessionPacingManager({
+    enabled: true,
+    autoOpenAnalysisBoard: true,
+    randomFn: () => 0.5,
+  });
+  const plan = reviewManager.planPostGameAnalysisReview({
+    totalPlies: 42,
+    gameUrl: "https://lichess.org/AbCdEfGh",
+  });
+  assert.equal(plan.enabled, true);
+  assert.equal(plan.analysisUrl, "https://lichess.org/AbCdEfGh/analysis");
+  assert.ok(plan.totalDurationMs >= 30_000 && plan.totalDurationMs <= 120_000);
+  assert.ok(plan.steps.length >= 4);
+
+  const ranReview = await reviewManager.simulatePostGameAnalysisReview(plan, {
+    openAnalysisBoard: (url) => {
+      openedUrls.push(url);
+    },
+    scrollToPly: (step) => {
+      scrolledPlies.push(step.plyIndex);
+    },
+    waitMs: async () => {},
+  });
+  assert.equal(ranReview, true);
+  assert.deepEqual(openedUrls, ["https://lichess.org/AbCdEfGh/analysis"]);
+  assert.equal(scrolledPlies.length, plan.steps.length);
+
   orchestrator.dispose();
 });
+

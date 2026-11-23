@@ -351,6 +351,8 @@ export interface SessionPacingConfig {
   readonly repeatedSufficiencyAnomalyLimit: number;
   /** Elo step-down in classical time controls (default 300). */
   readonly classicalEloStepDown: number;
+  /** Optional auto-open analysis board & scroll simulation (defaults to false). */
+  readonly autoOpenAnalysisBoard?: boolean;
   /** Optional chat settings (defaults to enabled: false). */
   readonly chat: ChatDispatchConfig;
   /** Injectable time & RNG hooks for deterministic tests. */
@@ -358,6 +360,27 @@ export interface SessionPacingConfig {
   readonly getLocalHour?: () => number;
   readonly randomFn?: () => number;
   readonly onSufficiencyAnomaly?: (check: ThinkTimeSufficiencyCheck) => void;
+}
+
+export interface PostGameAnalysisScrollStep {
+  readonly stepIndex: number;
+  readonly plyIndex: number;
+  readonly scrollDeltaY: number;
+  readonly dwellMs: number;
+}
+
+export interface PostGameAnalysisReviewPlan {
+  readonly enabled: boolean;
+  readonly analysisUrl: string | null;
+  readonly totalDurationMs: number;
+  readonly steps: readonly PostGameAnalysisScrollStep[];
+}
+
+export interface PostGameAnalysisCallbacks {
+  readonly openAnalysisBoard: (analysisUrl: string) => Promise<void> | void;
+  readonly scrollToPly: (step: PostGameAnalysisScrollStep) => Promise<void> | void;
+  readonly waitMs?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  readonly signal?: AbortSignal;
 }
 
 export const DEFAULT_SESSION_PACING_CONFIG: SessionPacingConfig = {
@@ -373,6 +396,7 @@ export const DEFAULT_SESSION_PACING_CONFIG: SessionPacingConfig = {
   postGameReviewMaxMs: 120_000,
   repeatedSufficiencyAnomalyLimit: 3,
   classicalEloStepDown: 300,
+  autoOpenAnalysisBoard: false,
   chat: {
     enabled: false,
     maxMidGameMessagesPerGame: 1,
@@ -715,6 +739,98 @@ export class SessionPacingManager {
     const max = Math.max(min, this.config.postGameReviewMaxMs);
     const u = clamp(this.rng(), 0, 1);
     return Math.round(min + u * (max - min));
+  }
+
+  /**
+   * Plans auto-opening the post-game analysis board and generating variable-paced
+   * human scroll steps across the completed move list within the 30–120s window.
+   */
+  planPostGameAnalysisReview(params: {
+    readonly totalPlies: number;
+    readonly gameUrl?: string;
+    readonly analysisUrl?: string;
+  }): PostGameAnalysisReviewPlan {
+    if (!this.config.enabled || !this.config.autoOpenAnalysisBoard) {
+      return {
+        enabled: false,
+        analysisUrl: null,
+        totalDurationMs: 0,
+        steps: [],
+      };
+    }
+
+    const totalPlies = Math.max(2, Math.round(params.totalPlies));
+    const totalBudgetMs = Math.max(
+      this.config.postGameReviewMinMs,
+      this.samplePostGameReviewWaitMs()
+    );
+    const derivedUrl =
+      params.analysisUrl ??
+      (params.gameUrl
+        ? params.gameUrl.includes("/analysis")
+          ? params.gameUrl
+          : `${params.gameUrl.replace(/\/+$/, "")}/analysis`
+        : "about:blank#analysis");
+
+    const stepCount = clamp(Math.min(totalPlies, 16), 4, 16);
+    const stride = Math.max(1, Math.floor(totalPlies / stepCount));
+    const rawWeights: number[] = [];
+    for (let i = 0; i < stepCount; i++) {
+      // Humans linger slightly longer around critical middlegame transitions
+      const u = 0.5 + this.rng() * 1.1;
+      rawWeights.push(u);
+    }
+    const weightSum = rawWeights.reduce((acc, w) => acc + w, 0) || 1;
+
+    const steps: PostGameAnalysisScrollStep[] = [];
+    let allocated = 0;
+    for (let i = 0; i < stepCount; i++) {
+      const isLast = i === stepCount - 1;
+      const plyIndex = isLast
+        ? totalPlies
+        : Math.min(totalPlies, Math.max(1, (i + 1) * stride));
+      const dwellMs = isLast
+        ? Math.max(350, totalBudgetMs - allocated)
+        : Math.max(350, Math.round((rawWeights[i] / weightSum) * totalBudgetMs));
+      allocated += dwellMs;
+      const direction = i > 1 && this.rng() < 0.18 ? -1 : 1; // occasional backward glance
+      const scrollDeltaY = Math.round(direction * (38 + this.rng() * 76));
+      steps.push({
+        stepIndex: i,
+        plyIndex,
+        scrollDeltaY,
+        dwellMs,
+      });
+    }
+
+    return {
+      enabled: true,
+      analysisUrl: derivedUrl,
+      totalDurationMs: steps.reduce((acc, s) => acc + s.dwellMs, 0),
+      steps,
+    };
+  }
+
+  /**
+   * Executes a planned post-game analysis board open & human-like move scroll sequence.
+   */
+  async simulatePostGameAnalysisReview(
+    plan: PostGameAnalysisReviewPlan,
+    callbacks: PostGameAnalysisCallbacks
+  ): Promise<boolean> {
+    if (!plan.enabled || !plan.analysisUrl) {
+      return false;
+    }
+    const wait =
+      callbacks.waitMs ??
+      ((ms: number) => new Promise<void>((r) => setTimeout(r, Math.max(0, ms))));
+    await callbacks.openAnalysisBoard(plan.analysisUrl);
+    for (const step of plan.steps) {
+      if (callbacks.signal?.aborted) return false;
+      await callbacks.scrollToPly(step);
+      await wait(step.dwellMs, callbacks.signal);
+    }
+    return true;
   }
 
   /**
