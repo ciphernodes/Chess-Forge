@@ -110,6 +110,8 @@ fun BrowserWorkspaceTab(
     onSelectPreset: (BrowserSitePreset) -> Unit,
     onNavigateUrl: (String) -> Unit,
     onToggleEnabled: (Boolean) -> Unit,
+    onToggleOnlineAutoPlay: (Boolean) -> Unit = {},
+    onTogglePuzzleAutoSolve: (Boolean) -> Unit = {},
     onSelectDepth: (Int) -> Unit,
     onSelectCpuProfile: (CpuUsageProfile) -> Unit,
     onSelectEvalOrientation: (EvalBarOrientation) -> Unit,
@@ -423,6 +425,44 @@ fun BrowserWorkspaceTab(
                         modifier = Modifier
                             .height(48.dp)
                             .testTag("browser_toggle_overlay_chip"),
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = TacticalAmber.copy(alpha = 0.22f),
+                            selectedLabelColor = TacticalAmber
+                        )
+                    )
+
+                    val onlineOn = extensionConfig.onlineAutoPlay || extensionConfig.autonomousMode
+                    FilterChip(
+                        selected = onlineOn,
+                        onClick = { onToggleOnlineAutoPlay(!onlineOn) },
+                        label = {
+                            Text(
+                                text = if (onlineOn) "Auto ${extensionConfig.autonomousEloProfile}" else "Auto OFF",
+                                maxLines = 1
+                            )
+                        },
+                        modifier = Modifier
+                            .height(48.dp)
+                            .testTag("browser_toggle_online_autoplay_chip"),
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = TacticalEmerald.copy(alpha = 0.22f),
+                            selectedLabelColor = TacticalEmerald
+                        )
+                    )
+
+                    val puzzleAutoOn = extensionConfig.puzzleSolverEnabled && extensionConfig.puzzleAutoSolve
+                    FilterChip(
+                        selected = puzzleAutoOn,
+                        onClick = { onTogglePuzzleAutoSolve(!puzzleAutoOn) },
+                        label = {
+                            Text(
+                                text = if (puzzleAutoOn) "Puzzle AUTO" else "Puzzle OFF",
+                                maxLines = 1
+                            )
+                        },
+                        modifier = Modifier
+                            .height(48.dp)
+                            .testTag("browser_toggle_puzzle_solver_chip"),
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = TacticalAmber.copy(alpha = 0.22f),
                             selectedLabelColor = TacticalAmber

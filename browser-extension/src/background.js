@@ -14,7 +14,15 @@ const DEFAULT_SETTINGS = {
   cpuProfile: "balanced",
   turnOverride: "auto",
   practiceAutoPlay: false,
-  practiceHumanDelayMs: 650
+  practiceHumanDelayMs: 650,
+  autonomousMode: false,
+  onlineAutoPlay: false,
+  autonomousEloProfile: 1600,
+  puzzleSolverEnabled: false,
+  puzzleAutoSolve: false,
+  puzzleAutoNext: false,
+  puzzleLevelMode: "all",
+  puzzleSolveDelayMs: 450
 };
 
 let engineStatus = {

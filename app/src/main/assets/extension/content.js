@@ -33,7 +33,14 @@
     practiceAutoPlay: false,
     practiceHumanDelayMs: 650,
     autonomousMode: false,
-    autonomousEloProfile: 1600
+    autonomousEloProfile: 1600,
+    onlineAutoPlay: false,
+    puzzleSolverEnabled: false,
+    puzzleAutoSolve: false,
+    puzzleAutoNext: false,
+    puzzleLevelMode: "all",
+    puzzleSolveDelayMs: 450,
+    accessibilityDispatcherEnabled: false
   };
 
   let config = Object.assign({}, DEFAULT_CONFIG, window.__ChessForgeExtensionConfig || {});
@@ -67,6 +74,11 @@
   let engineStatus = "IDLE";
   let scheduledTimer = null;
   let practiceAutoTimer = null;
+  let autoExecutionTimer = null;
+  let puzzleNextTimer = null;
+  let lastExecutedFenKey = "";
+  let isDispatchingPointer = false;
+  let lastBoardContext = null;
   let activeSearchSeq = 0;
   let observer = null;
   let boardResizeObserver = null;
@@ -84,6 +96,8 @@
   let bookBannerEl = null;
   let tablebaseBannerEl = null;
   let fabPill = null;
+  let fabAutoBtn = null;
+  let fabPuzzleBtn = null;
 
   function hasChromeStorage() {
     return typeof chrome !== "undefined" && chrome.storage && chrome.storage.local;
@@ -588,6 +602,59 @@
       runAnalysis(true);
     });
 
+    fabAutoBtn = document.createElement("button");
+    fabAutoBtn.type = "button";
+    const syncFabButtons = () => {
+      const onlineOn = Boolean(config.onlineAutoPlay || config.autonomousMode);
+      fabAutoBtn.textContent = onlineOn ? `Auto:${config.autonomousEloProfile || 1600}` : "Auto:OFF";
+      fabAutoBtn.style.background = onlineOn ? "#F59E0B" : "#21262D";
+      fabAutoBtn.style.color = onlineOn ? "#451A03" : "#E6EDF3";
+      if (fabPuzzleBtn) {
+        const puzOn = Boolean(config.puzzleSolverEnabled);
+        const puzExec = Boolean(config.puzzleAutoSolve);
+        fabPuzzleBtn.textContent = !puzOn ? "Puz:OFF" : (puzExec ? "Puz:AUTO" : "Puz:HINT");
+        fabPuzzleBtn.style.background = puzExec ? "#10B981" : (puzOn ? "#38BDF8" : "#21262D");
+        fabPuzzleBtn.style.color = puzOn ? "#042F2E" : "#E6EDF3";
+      }
+    };
+    fabAutoBtn.style.cssText =
+      "background:#21262D;color:#E6EDF3;border:1px solid #30363D;border-radius:999px;padding:6px 8px;font-size:10px;font-weight:700;cursor:pointer;min-height:32px;";
+    fabAutoBtn.addEventListener("click", () => {
+      const next = !(config.onlineAutoPlay || config.autonomousMode);
+      config.onlineAutoPlay = next;
+      config.autonomousMode = next;
+      syncFabButtons();
+      if (hasChromeStorage()) chrome.storage.local.set({ onlineAutoPlay: next, autonomousMode: next });
+      lastExecutedFenKey = "";
+      runAnalysis(true);
+    });
+
+    fabPuzzleBtn = document.createElement("button");
+    fabPuzzleBtn.type = "button";
+    fabPuzzleBtn.style.cssText =
+      "background:#21262D;color:#E6EDF3;border:1px solid #30363D;border-radius:999px;padding:6px 8px;font-size:10px;font-weight:700;cursor:pointer;min-height:32px;";
+    fabPuzzleBtn.addEventListener("click", () => {
+      if (!config.puzzleSolverEnabled) {
+        config.puzzleSolverEnabled = true;
+        config.puzzleAutoSolve = false;
+      } else if (!config.puzzleAutoSolve) {
+        config.puzzleAutoSolve = true;
+      } else {
+        config.puzzleSolverEnabled = false;
+        config.puzzleAutoSolve = false;
+      }
+      syncFabButtons();
+      if (hasChromeStorage()) {
+        chrome.storage.local.set({
+          puzzleSolverEnabled: config.puzzleSolverEnabled,
+          puzzleAutoSolve: config.puzzleAutoSolve
+        });
+      }
+      lastExecutedFenKey = "";
+      runAnalysis(true);
+    });
+    syncFabButtons();
+
     fairPlayPill = document.createElement("div");
     fairPlayPill.style.cssText =
       "position:fixed;left:10px;bottom:12px;display:none;align-items:center;gap:6px;padding:4px 10px;" +
@@ -596,6 +663,9 @@
 
     fabPill.appendChild(toggleBtn);
     fabPill.appendChild(sideBtn);
+    fabPill.appendChild(fabAutoBtn);
+    fabPill.appendChild(fabPuzzleBtn);
+    overlayHost._syncFabButtons = syncFabButtons;
     shadowContainer.appendChild(svgLayer);
     shadowContainer.appendChild(evalBarEl);
     shadowContainer.appendChild(hudPill);
@@ -1053,7 +1123,13 @@
       const alt = analysis.lines[1] ? ` | #2 ${analysis.lines[1].san}` : "";
       const backendTag = analysis.engineBackend && analysis.engineBackend.includes("WASM") ? "SF19" : "JS";
       const annTag = top.annotation ? top.annotation : "";
-      hudTextEl.textContent = `${backendTag} • ${top.san}${annTag} ${scoreLabel} • D${top.depth}${alt}`;
+      const ctxPrefix =
+        lastBoardContext && lastBoardContext.isPuzzle && config.puzzleSolverEnabled
+          ? `PUZZLE${lastBoardContext.puzzleRating ? " " + lastBoardContext.puzzleRating : ""} • `
+          : (lastBoardContext && lastBoardContext.isOnlineGame && (config.onlineAutoPlay || config.autonomousMode))
+          ? `AUTO ${config.autonomousEloProfile || 1600} • `
+          : "";
+      hudTextEl.textContent = `${ctxPrefix}${backendTag} • ${top.san}${annTag} ${scoreLabel} • D${top.depth}${alt}`;
       hudPill.style.background = lastBoardTheme.hudBg;
       hudPill.style.color = lastBoardTheme.hudText;
       hudPill.style.borderColor =
@@ -1458,42 +1534,250 @@
     fairPlayPill.textContent = palette.label;
   }
 
-  function evaluateHumanizerDecision(fen, turn, result) {
+  const ONLINE_ELO_SETTINGS = {
+    800: { elo: 800, blunderCap: 260, temp: 1.38, minDelay: 700, maxDelay: 2400, depth: 8, skill: 4 },
+    1000: { elo: 1000, blunderCap: 210, temp: 1.22, minDelay: 650, maxDelay: 2200, depth: 10, skill: 7 },
+    1200: { elo: 1200, blunderCap: 165, temp: 1.08, minDelay: 650, maxDelay: 2100, depth: 14, skill: 10 },
+    1600: { elo: 1600, blunderCap: 105, temp: 0.78, minDelay: 600, maxDelay: 1950, depth: 16, skill: 14 },
+    2000: { elo: 2000, blunderCap: 60, temp: 0.50, minDelay: 550, maxDelay: 1800, depth: 18, skill: 17 },
+    2400: { elo: 2400, blunderCap: 35, temp: 0.28, minDelay: 450, maxDelay: 1500, depth: 19, skill: 19 },
+    2800: { elo: 2800, blunderCap: 20, temp: 0.16, minDelay: 320, maxDelay: 1100, depth: 20, skill: 20 }
+  };
+
+  function resolveOnlineProfile(eloInput) {
+    const raw = parseInt(eloInput || config.autonomousEloProfile || config.targetElo || 1600, 10);
+    const keys = [800, 1000, 1200, 1600, 2000, 2400, 2800];
+    let bestKey = 1600;
+    let bestDist = Infinity;
+    for (const k of keys) {
+      const d = Math.abs(k - raw);
+      if (d < bestDist) {
+        bestDist = d;
+        bestKey = k;
+      }
+    }
+    return ONLINE_ELO_SETTINGS[bestKey];
+  }
+
+  function detectBoardContext(boardInfo, turn) {
+    const host = (window.location && window.location.hostname || "").toLowerCase();
+    const path = (window.location && window.location.pathname || "").toLowerCase();
+    const site = boardInfo.isPracticeBoard
+      ? "practice"
+      : (boardInfo.site === "lichess" || host.includes("lichess"))
+      ? "lichess"
+      : (boardInfo.site === "chesscom" || host.includes("chess.com"))
+      ? "chesscom"
+      : "unknown";
+
+    const hasPuzzleDom = Boolean(
+      document.querySelector(
+        ".puzzle__board, .puzzle__side, .puzzle__tools, .storm--board, .puz-board, " +
+        "[data-cy='puzzle-board'], .puzzle-board-component, .board-layout-puzzle, .puzzle-rush, .daily-puzzle"
+      )
+    );
+
+    let puzzleMode = null;
+    if (site === "lichess") {
+      if (path.includes("/storm")) puzzleMode = "storm";
+      else if (path.includes("/streak")) puzzleMode = "streak";
+      else if (path.includes("/racer")) puzzleMode = "racer";
+      else if (path.includes("/training") || hasPuzzleDom) puzzleMode = "training";
+    } else if (site === "chesscom") {
+      if (path.includes("/puzzles/rush") || path.includes("/rush")) puzzleMode = "rush";
+      else if (path.includes("/puzzles/battle") || path.includes("/battle")) puzzleMode = "battle";
+      else if (path.includes("/daily-chess-puzzle") || path.includes("/daily")) puzzleMode = "daily";
+      else if (path.includes("/puzzles/rated")) puzzleMode = "rated";
+      else if (path.includes("/puzzles") || hasPuzzleDom) puzzleMode = "standard";
+    }
+
+    const isPuzzle = puzzleMode !== null;
+    let puzzleStatus = "NONE";
+    let puzzleRating = null;
+
+    if (isPuzzle) {
+      const fbEl = document.querySelector(
+        ".puzzle__feedback, .puzzle__tools .complete, .cc-banner-component, .puzzle-status-component, [data-cy='puzzle-solved'], .puzzle-feedback"
+      );
+      const fbText = ((fbEl && fbEl.textContent) || "").toLowerCase();
+      const fbCls = ((fbEl && fbEl.className) || "").toLowerCase();
+      const hasContinueBtn = Boolean(
+        document.querySelector(
+          ".puzzle__controls button.continue, .puzzle__controls a.continue, [data-cy='next-puzzle-button'], button[aria-label*='Next Puzzle'], .next-puzzle-btn"
+        )
+      );
+
+      if (
+        fbCls.includes("win") ||
+        fbCls.includes("correct") ||
+        fbText.includes("puzzle solved") ||
+        fbText.includes("success") ||
+        fbText.includes("well done") ||
+        fbText.includes("solved") ||
+        hasContinueBtn
+      ) {
+        puzzleStatus = "SOLVED";
+      } else if (
+        fbCls.includes("fail") ||
+        fbCls.includes("incorrect") ||
+        fbText.includes("puzzle failed") ||
+        fbText.includes("incorrect") ||
+        fbText.includes("try again")
+      ) {
+        puzzleStatus = "FAILED";
+      } else {
+        const expectedColor = boardInfo.isFlipped ? "b" : "w";
+        puzzleStatus = turn === expectedColor ? "SOLVING" : "WAITING_OPPONENT";
+      }
+
+      const ratingEl = document.querySelector(
+        ".puzzle__side__user__rating, .puzzle__side .rating, .sidebar-header-rating, .puzzle-rating-component, [data-cy='puzzle-rating']"
+      );
+      const ratingMatch = ((ratingEl && ratingEl.textContent) || "").match(/\d{3,4}/);
+      if (ratingMatch) puzzleRating = parseInt(ratingMatch[0], 10);
+    }
+
+    const isGameOver = Boolean(
+      !isPuzzle &&
+      !boardInfo.isPracticeBoard &&
+      document.querySelector(
+        ".result-wrap .result, .rcontrols .rematch, .game-over-modal-content, .game-over-header-component, .board-modal-component .header-title-component"
+      )
+    );
+
+    const isOnlineGame =
+      !isPuzzle &&
+      !boardInfo.isPracticeBoard &&
+      (site === "lichess" || site === "chesscom") &&
+      !path.includes("/analysis") &&
+      !path.includes("/editor") &&
+      !path.includes("/study");
+
+    return {
+      site,
+      isOnlineGame,
+      isPuzzle,
+      isPracticeBoard: Boolean(boardInfo.isPracticeBoard),
+      isGameOver,
+      puzzleMode,
+      puzzleStatus,
+      puzzleRating,
+      playerColor: boardInfo.isFlipped ? "b" : "w",
+      currentTurn: turn
+    };
+  }
+
+  function orderPuzzleLines(lines) {
+    if (!lines || lines.length === 0) return lines;
+    return lines.slice().sort((a, b) => {
+      const aMate = a.mate !== null && a.mate !== undefined && a.mate > 0;
+      const bMate = b.mate !== null && b.mate !== undefined && b.mate > 0;
+      if (aMate && bMate) return a.mate - b.mate;
+      if (aMate !== bMate) return aMate ? -1 : 1;
+      return scoreToComparableCp(b) - scoreToComparableCp(a);
+    });
+  }
+
+  function resolveEffectiveEngineConfig(context) {
+    if (context && context.isPuzzle && config.puzzleSolverEnabled) {
+      const mode = config.puzzleLevelMode || "all";
+      const isSpeed = ["storm", "racer", "rush", "battle"].includes(context.puzzleMode || "");
+      let targetDepth = config.maxDepth || 14;
+      if (mode === "easy") targetDepth = 8;
+      else if (mode === "medium") targetDepth = 12;
+      else if (mode === "hard") targetDepth = 16;
+      else if (mode === "master") targetDepth = 20;
+      else {
+        const pr = context.puzzleRating || 1600;
+        targetDepth = isSpeed ? 12 : (pr >= 2300 ? 20 : pr >= 1800 ? 17 : pr >= 1300 ? 14 : 11);
+      }
+      return Object.assign({}, config, {
+        maxDepth: targetDepth,
+        skillLevel: 20,
+        multiPv: Math.max(2, config.multiPv || 2)
+      });
+    }
+    if (context && context.isOnlineGame && (config.onlineAutoPlay || config.autonomousMode)) {
+      const prof = resolveOnlineProfile(config.autonomousEloProfile || config.targetElo);
+      return Object.assign({}, config, {
+        maxDepth: Math.min(config.maxDepth || prof.searchDepth, prof.searchDepth),
+        skillLevel: prof.skill,
+        multiPv: Math.max(3, config.multiPv || 4)
+      });
+    }
+    return config;
+  }
+
+  function evaluateHumanizerDecision(fen, turn, result, context) {
     const snap = recomputeFairPlaySnapshot();
-    if (config.fairPlayAuditorEnabled !== false && snap.lockedOut) {
-      return { allow: false, reason: "LOCKOUT", delayMs: 0, result };
-    }
-    if (!config.humanizerEnabled) {
-      return { allow: true, reason: "HUMANIZER_OFF", delayMs: 0, result };
-    }
     const lines = result.lines || [];
     if (lines.length === 0) return { allow: false, reason: "NO_LINES", delayMs: 0, result };
 
-    // Suppress on opening book, simplified endgames (<= 6 pieces), or forced recaptures
-    const pieceCount = ((fen.split(" ")[0] || "").match(/[a-zA-Z]/g) || []).length;
-    if (pieceCount <= 6) return { allow: false, reason: "SIMPLIFIED_ENDGAME", delayMs: 0, result };
-
-    if (lastOpeningBook && Array.isArray(lastOpeningBook.moves) && lastOpeningBook.moves.some((m) => (m.uci || "").slice(0, 4) === (lines[0].uci || "").slice(0, 4))) {
-      return { allow: false, reason: "OPENING_BOOK", delayMs: 0, result };
+    // All-level Puzzle Solver Mode: always compute exact tactical mate/winning lines cleanly
+    if (context && context.isPuzzle && config.puzzleSolverEnabled) {
+      const puzzleLines = orderPuzzleLines(lines);
+      const isSpeed = ["storm", "racer", "rush", "battle"].includes(context.puzzleMode || "");
+      const baseDelay = Math.max(80, Math.min(2500, parseInt(config.puzzleSolveDelayMs || 450, 10)));
+      const puzDelay = isSpeed ? Math.max(120, Math.min(baseDelay, 260)) : baseDelay;
+      return {
+        allow: true,
+        reason: "PUZZLE_SOLVER",
+        delayMs: config.puzzleAutoSolve ? 0 : 0,
+        autoMoveDelayMs: puzDelay,
+        result: Object.assign({}, result, { lines: puzzleLines })
+      };
     }
 
-    if (lines.length >= 2 && (scoreToComparableCp(lines[0]) - scoreToComparableCp(lines[1])) >= 150 && (lines[0].san || "").includes("x")) {
-      return { allow: false, reason: "FORCED_RECAPTURE", delayMs: 0, result };
+    const onlineActive = Boolean(context && context.isOnlineGame && (config.onlineAutoPlay || config.autonomousMode));
+    const onlineProf = resolveOnlineProfile(config.autonomousEloProfile || config.targetElo);
+
+    // At 2800 (Max GM) online profile, return full-strength top engine move
+    if (onlineActive && onlineProf.elo >= 2800) {
+      return {
+        allow: true,
+        reason: "MAX_GM_ENGINE",
+        delayMs: 0,
+        autoMoveDelayMs: Math.round(onlineProf.minDelay + Math.random() * (onlineProf.maxDelay - onlineProf.minDelay)),
+        result
+      };
     }
 
-    const maxHints = Math.max(1, parseInt(config.maxHintsPerGame || 3, 10));
-    if (!shownHintFens.has(fen) && hintsUsedInGame >= maxHints) {
-      return { allow: false, reason: "HINT_BUDGET_EXHAUSTED", delayMs: 0, result };
+    if (config.fairPlayAuditorEnabled !== false && snap.lockedOut) {
+      return { allow: false, reason: "LOCKOUT", delayMs: 0, result };
+    }
+    if (!config.humanizerEnabled && !onlineActive) {
+      return { allow: true, reason: "HUMANIZER_OFF", delayMs: 0, result };
+    }
+
+    // In hint-only mode (not online auto-play), suppress trivial endgames/book/hint budget caps
+    if (!onlineActive) {
+      const pieceCount = ((fen.split(" ")[0] || "").match(/[a-zA-Z]/g) || []).length;
+      if (pieceCount <= 6) return { allow: false, reason: "SIMPLIFIED_ENDGAME", delayMs: 0, result };
+
+      if (lastOpeningBook && Array.isArray(lastOpeningBook.moves) && lastOpeningBook.moves.some((m) => (m.uci || "").slice(0, 4) === (lines[0].uci || "").slice(0, 4))) {
+        return { allow: false, reason: "OPENING_BOOK", delayMs: 0, result };
+      }
+
+      if (lines.length >= 2 && (scoreToComparableCp(lines[0]) - scoreToComparableCp(lines[1])) >= 150 && (lines[0].san || "").includes("x")) {
+        return { allow: false, reason: "FORCED_RECAPTURE", delayMs: 0, result };
+      }
+
+      const maxHints = Math.max(1, parseInt(config.maxHintsPerGame || 3, 10));
+      if (!shownHintFens.has(fen) && hintsUsedInGame >= maxHints) {
+        return { allow: false, reason: "HINT_BUDGET_EXHAUSTED", delayMs: 0, result };
+      }
     }
 
     const deltaE = lines.length >= 2 ? Math.max(0, expectedScoreForLine(lines[0]) - expectedScoreForLine(lines[1])) : 0.5;
-    const criticalThreshold = 0.14 + (snap.riskLevel === "ELEVATED" ? 0.08 : 0);
-    if (deltaE < criticalThreshold) {
-      return { allow: false, reason: "LOW_CRITICALITY_WDL", delayMs: 0, result };
+    if (!onlineActive) {
+      const criticalThreshold = 0.14 + (snap.riskLevel === "ELEVATED" ? 0.08 : 0);
+      if (deltaE < criticalThreshold) {
+        return { allow: false, reason: "LOW_CRITICALITY_WDL", delayMs: 0, result };
+      }
     }
 
     const clockMs = readActiveClockMs(turn);
-    if (clockMs !== null) {
+    if (!onlineActive && clockMs !== null) {
       if (clockMs < 15000) return { allow: false, reason: "LOW_CLOCK_CUTOFF", delayMs: 0, result };
       if (clockMs < 25000) {
         const p = (clockMs - 15000) / 10000;
@@ -1502,14 +1786,20 @@
       }
     }
 
-    const targetElo = Math.max(400, Math.min(3000, parseInt(config.targetElo || 1500, 10)));
+    const targetElo = onlineActive
+      ? onlineProf.elo
+      : Math.max(400, Math.min(3000, parseInt(config.targetElo || 1500, 10)));
     const priors = computeHeuristicPriors(fen, lines, targetElo);
     const bestCp = scoreToComparableCp(lines[0]);
+    const blunderCap = onlineActive ? onlineProf.blunderCap : 160;
     const lambda = 0.004 + ((Math.max(600, Math.min(2800, targetElo)) - 600) / 2200) * 0.028;
-    const baseTemp = 1.35 - ((Math.max(600, Math.min(2800, targetElo)) - 600) / 2200) * 0.95;
+    const baseTemp = onlineActive
+      ? onlineProf.temp
+      : (1.35 - ((Math.max(600, Math.min(2800, targetElo)) - 600) / 2200) * 0.95);
     const temp = baseTemp * (snap.riskLevel === "ELEVATED" ? 2.0 : 1.0);
 
-    const survivors = lines.filter((l) => (bestCp - scoreToComparableCp(l)) <= 160 && (priors.get(l.uci) || 0) >= 0.03);
+    const rawSurvivors = lines.filter((l) => (bestCp - scoreToComparableCp(l)) <= blunderCap && (priors.get(l.uci) || 0) >= 0.02);
+    const survivors = rawSurvivors.length > 0 ? rawSurvivors : (onlineActive ? [lines[0]] : []);
     if (survivors.length === 0) return { allow: false, reason: "NO_PLAUSIBLE_HUMAN", delayMs: 0, result };
 
     const utils = survivors.map((l) => (Math.log(Math.max(1e-5, priors.get(l.uci) || 0.03)) - lambda * Math.max(0, bestCp - scoreToComparableCp(l))) / Math.max(0.08, temp));
@@ -1526,16 +1816,222 @@
     const shallow = result.shallowDepth6;
     const sharpDivergence = shallow && shallow.bestUci && shallow.bestUci.slice(0, 4) !== (lines[0].uci || "").slice(0, 4) ? 0.7 : 0;
     const complexity = Math.max(0, Math.min(1, 0.45 * Math.min(1, deltaE / 0.35) + 0.35 * sharpDivergence + 0.2 * Math.min(1, lines.length / 4)));
-    const minD = 800 + complexity * (4000 - 800);
-    const maxD = 1500 + complexity * (9500 - 1500);
-    const delayMs = Math.max(snap.riskLevel === "ELEVATED" ? 1200 : 0, Math.round(minD + Math.random() * (maxD - minD)));
+    let minD = onlineActive ? onlineProf.minDelay : (800 + complexity * (4000 - 800));
+    let maxD = onlineActive ? onlineProf.maxDelay : (1500 + complexity * (9500 - 1500));
+    if (clockMs !== null && clockMs < 20000) {
+      const compress = Math.max(0.18, clockMs / 20000);
+      minD *= compress;
+      maxD *= compress;
+    }
+    const delayMs = Math.max(snap.riskLevel === "ELEVATED" ? 900 : 180, Math.round(minD + Math.random() * Math.max(60, maxD - minD)));
 
     return {
       allow: true,
-      reason: "OK",
-      delayMs,
+      reason: onlineActive ? "ONLINE_HUMANIZED" : "OK",
+      delayMs: onlineActive ? 0 : delayMs,
+      autoMoveDelayMs: delayMs,
       result: Object.assign({}, result, { lines: reorderedLines })
     };
+  }
+
+  function clickPromotionChoiceIfVisible(promoChar, turn) {
+    const pieceChar = (promoChar || "q").toLowerCase();
+    const roleMap = { q: "queen", r: "rook", b: "bishop", n: "knight" };
+    const roleName = roleMap[pieceChar] || "queen";
+    const selectors = [
+      `#promotion-choice square[data-role='${roleName}']`,
+      `.promotion-choice [data-role='${roleName}']`,
+      `#promotion-choice piece.${roleName}`,
+      `.promotion-window .promotion-piece.${turn}${pieceChar}`,
+      `.promotion-window [data-piece='${turn}${pieceChar}']`,
+      `.promotion-window [data-piece='${pieceChar}']`
+    ];
+    for (const sel of selectors) {
+      const btn = document.querySelector(sel);
+      if (btn) {
+        try {
+          if (typeof btn.click === "function") btn.click();
+          else btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        } catch (_) {}
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function dispatchPointerAt(el, type, x, y, buttons, button) {
+    if (!el) return;
+    try {
+      if (typeof PointerEvent === "function") {
+        el.dispatchEvent(new PointerEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          clientX: x,
+          clientY: y,
+          screenX: x,
+          screenY: y,
+          pointerId: 1,
+          pointerType: "mouse",
+          isPrimary: true,
+          buttons,
+          button
+        }));
+      }
+    } catch (_) {}
+    const mouseType =
+      type === "pointerdown" ? "mousedown" :
+      type === "pointermove" ? "mousemove" :
+      type === "pointerup" ? "mouseup" : type;
+    try {
+      el.dispatchEvent(new MouseEvent(mouseType, {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        clientX: x,
+        clientY: y,
+        screenX: x,
+        screenY: y,
+        buttons,
+        button
+      }));
+    } catch (_) {}
+  }
+
+  function jitterCoordinate(center, cellSize) {
+    const offset = (Math.random() - 0.5) * Math.min(10, cellSize * 0.28);
+    return center + offset;
+  }
+
+  function executeBoardMove(boardInfo, uciMove, turn, fastMode) {
+    if (!boardInfo || !boardInfo.rect || !uciMove || uciMove.length < 4) return;
+    const fromSq = uciMove.slice(0, 2);
+    const toSq = uciMove.slice(2, 4);
+    const promoChar = uciMove.length >= 5 ? uciMove[4] : "q";
+    const fromPt = uciSquareToScreenCenter(fromSq, boardInfo.rect, boardInfo.isFlipped);
+    const toPt = uciSquareToScreenCenter(toSq, boardInfo.rect, boardInfo.isFlipped);
+    if (!fromPt || !toPt) return;
+
+    const fx = jitterCoordinate(fromPt.x, fromPt.cellW);
+    const fy = jitterCoordinate(fromPt.y, fromPt.cellW);
+    const tx = jitterCoordinate(toPt.x, toPt.cellW);
+    const ty = jitterCoordinate(toPt.y, toPt.cellW);
+
+    const arcOffset = (Math.random() - 0.5) * Math.max(8, Math.hypot(tx - fx, ty - fy) * 0.14);
+    const steps = fastMode ? 5 : 9;
+    const stepMs = fastMode ? 12 : 20;
+    const waypoints = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const ease = t * t * t * (10 + t * (-15 + 6 * t));
+      const arc = Math.sin(Math.PI * t) * arcOffset;
+      const nx = fx + (tx - fx) * ease + (Math.random() - 0.5) * 1.1;
+      const ny = fy + (ty - fy) * ease + arc + (Math.random() - 0.5) * 1.1;
+      waypoints.push({ x: Number(nx.toFixed(1)), y: Number(ny.toFixed(1)), timestampOffsetMs: i * stepMs });
+    }
+
+    if (config.accessibilityDispatcherEnabled &&
+        typeof window.ChessForgeAndroidBridge !== "undefined" &&
+        typeof window.ChessForgeAndroidBridge.dispatchKinematicPath === "function") {
+      try {
+        const dpr = window.devicePixelRatio || 1;
+        window.ChessForgeAndroidBridge.dispatchKinematicPath(JSON.stringify({
+          mode: "drag",
+          durationMs: steps * stepMs,
+          viewportScale: dpr,
+          waypoints
+        }));
+      } catch (_) {}
+    }
+
+    const startTarget = document.elementFromPoint(fx, fy) || boardInfo.boardEl;
+    isDispatchingPointer = true;
+    try {
+      dispatchPointerAt(startTarget, "pointerdown", fx, fy, 1, 0);
+    } finally {
+      isDispatchingPointer = false;
+    }
+
+    let stepIdx = 1;
+    const driveStep = () => {
+      if (stepIdx < waypoints.length) {
+        const wp = waypoints[stepIdx++];
+        const moveTarget = document.elementFromPoint(wp.x, wp.y) || boardInfo.boardEl;
+        isDispatchingPointer = true;
+        try {
+          dispatchPointerAt(moveTarget, "pointermove", wp.x, wp.y, 1, 0);
+        } finally {
+          isDispatchingPointer = false;
+        }
+        setTimeout(driveStep, stepMs);
+        return;
+      }
+
+      const endTarget = document.elementFromPoint(tx, ty) || boardInfo.boardEl;
+      isDispatchingPointer = true;
+      try {
+        dispatchPointerAt(endTarget, "pointerup", tx, ty, 0, 0);
+        // Click fallback cleanly selects & places on click-to-move boards if drag didn't register
+        if (boardInfo.site === "chesscom" || boardInfo.site === "lichess") {
+          setTimeout(() => {
+            const bAfter = readActiveBoard();
+            if (!bAfter) return;
+            const afterPlacement = gridToPlacement(bAfter.grid);
+            if (afterPlacement === lastPlacement) {
+              const sEl = document.elementFromPoint(fx, fy) || bAfter.boardEl;
+              const dEl = document.elementFromPoint(tx, ty) || bAfter.boardEl;
+              isDispatchingPointer = true;
+              try {
+                dispatchPointerAt(sEl, "pointerdown", fx, fy, 1, 0);
+                dispatchPointerAt(sEl, "pointerup", fx, fy, 0, 0);
+                dispatchPointerAt(sEl, "click", fx, fy, 0, 0);
+                dispatchPointerAt(dEl, "pointerdown", tx, ty, 1, 0);
+                dispatchPointerAt(dEl, "pointerup", tx, ty, 0, 0);
+                dispatchPointerAt(dEl, "click", tx, ty, 0, 0);
+              } finally {
+                isDispatchingPointer = false;
+              }
+            }
+          }, 90);
+        }
+      } finally {
+        isDispatchingPointer = false;
+      }
+
+      const isPromoRank = (turn === "w" && toSq.endsWith("8")) || (turn === "b" && toSq.endsWith("1"));
+      if (uciMove.length >= 5 || isPromoRank) {
+        let tries = 0;
+        const pollPromo = () => {
+          if (clickPromotionChoiceIfVisible(promoChar, turn)) return;
+          if (++tries < 14) setTimeout(pollPromo, 70);
+        };
+        setTimeout(pollPromo, 80);
+      }
+    };
+    setTimeout(driveStep, fastMode ? 24 : 45);
+  }
+
+  function clickNextPuzzleButton() {
+    const selectors = [
+      ".puzzle__controls button.continue",
+      ".puzzle__controls a.continue",
+      ".puzzle__side button.continue",
+      "[data-cy='next-puzzle-button']",
+      "button[aria-label*='Next Puzzle']",
+      "button.next-puzzle-btn",
+      "button[aria-label*='Next']"
+    ];
+    for (const sel of selectors) {
+      const btn = document.querySelector(sel);
+      if (btn && btn.offsetParent !== null) {
+        try {
+          if (typeof btn.click === "function") btn.click();
+          else btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        } catch (_) {}
+        return true;
+      }
+    }
+    return false;
   }
 
   function clearSessionTelemetry() {
@@ -1589,11 +2085,22 @@
     clearSessionTelemetry
   };
 
-  function publishResult(boardInfo, turn, result, playedMove) {
+  function publishResult(boardInfo, turn, result, playedMove, boardContext) {
     if (humanizerDelayTimer) {
       clearTimeout(humanizerDelayTimer);
       humanizerDelayTimer = null;
     }
+    if (autoExecutionTimer) {
+      clearTimeout(autoExecutionTimer);
+      autoExecutionTimer = null;
+    }
+    if (puzzleNextTimer) {
+      clearTimeout(puzzleNextTimer);
+      puzzleNextTimer = null;
+    }
+    const ctx = boardContext || detectBoardContext(boardInfo, turn);
+    lastBoardContext = ctx;
+
     if (lastAnalysis && lastAnalysis.fen !== result.fen) {
       prevAnalysisForAnnotation = lastAnalysis;
       lastPlayedAnnotation = evaluatePlayedMoveAnnotation(
@@ -1604,7 +2111,7 @@
         result.lines,
         playedMove
       );
-      if (config.fairPlayAuditorEnabled !== false) {
+      if (config.fairPlayAuditorEnabled !== false && !ctx.isPuzzle) {
         recordCompletedMoveForAuditor(prevAnalysisForAnnotation, playedMove, turn);
       }
     }
@@ -1613,7 +2120,7 @@
     lastBoardTheme = detectBoardTheme(boardInfo);
     setStatus("IDLE");
 
-    const decision = evaluateHumanizerDecision(result.fen, turn, result);
+    const decision = evaluateHumanizerDecision(result.fen, turn, result, ctx);
     const snapshot = fairPlayState.lastSnapshot;
     const activeResult = decision.result || result;
 
@@ -1651,6 +2158,7 @@
       openingBook: lastOpeningBook,
       tablebase: lastTablebase,
       fairPlay: snapshot,
+      boardContext: ctx,
       humanizerSuppression: decision.allow ? null : decision.reason
     });
 
@@ -1666,28 +2174,104 @@
       });
     }
 
-    // Offline Practice Board Sparring Auto-Play (strictly offline Practice Board only)
+    // 1. Offline Practice Board Sparring Auto-Play
     if (practiceAutoTimer) clearTimeout(practiceAutoTimer);
     if (
       boardInfo.isPracticeBoard === true &&
       (config.practiceAutoPlay || config.autonomousMode) &&
-      result.lines &&
-      result.lines.length > 0 &&
+      activeResult.lines &&
+      activeResult.lines.length > 0 &&
       typeof window.__chessForgeMakePracticeMove === "function"
     ) {
       const baseDelay = Math.max(250, Math.min(2500, parseInt(config.practiceHumanDelayMs || 650, 10)));
       const jitter = Math.round((Math.random() - 0.5) * Math.min(240, baseDelay * 0.35));
       practiceAutoTimer = setTimeout(() => {
         if (config.enabled && (config.practiceAutoPlay || config.autonomousMode) && boardInfo.isPracticeBoard === true) {
-          window.__chessForgeMakePracticeMove(result.lines[0].uci);
+          window.__chessForgeMakePracticeMove(activeResult.lines[0].uci);
         }
       }, baseDelay + jitter);
+      return;
+    }
+
+    const fenActionKey = `${result.fen}|${ctx.puzzleStatus}|${ctx.puzzleMode || ""}`;
+
+    // 2. All-Level Lichess & Chess.com Puzzle Auto-Solver (+ Optional Auto-Next)
+    if (ctx.isPuzzle && config.puzzleSolverEnabled && config.puzzleAutoSolve) {
+      if (ctx.puzzleStatus === "SOLVED") {
+        if (config.puzzleAutoNext) {
+          const nextDelay = Math.max(450, Math.min(2200, parseInt(config.puzzleSolveDelayMs || 450, 10) + 350));
+          puzzleNextTimer = setTimeout(() => {
+            if (config.enabled && config.puzzleSolverEnabled && config.puzzleAutoNext) {
+              clickNextPuzzleButton();
+            }
+          }, nextDelay);
+        }
+        return;
+      }
+      if (
+        ctx.puzzleStatus === "SOLVING" &&
+        turn === ctx.playerColor &&
+        activeResult.lines &&
+        activeResult.lines.length > 0 &&
+        lastExecutedFenKey !== fenActionKey
+      ) {
+        const moveUci = activeResult.lines[0].uci;
+        const solveDelay = Math.max(80, Math.min(2500, decision.autoMoveDelayMs || config.puzzleSolveDelayMs || 450));
+        autoExecutionTimer = setTimeout(() => {
+          autoExecutionTimer = null;
+          if (!config.enabled || !config.puzzleSolverEnabled || !config.puzzleAutoSolve) return;
+          const live = readActiveBoard();
+          if (!live) return;
+          const livePlacement = gridToPlacement(live.grid);
+          if (`${livePlacement} ${turn}` !== `${result.fen.split(" ")[0]} ${turn}`) return;
+          lastExecutedFenKey = fenActionKey;
+          const isSpeed = ["storm", "racer", "rush", "battle"].includes(ctx.puzzleMode || "");
+          executeBoardMove(live, moveUci, turn, isSpeed);
+        }, solveDelay);
+      }
+      return;
+    }
+
+    // 3. Online Lichess & Chess.com Auto-Play (800 -> 2800 Elo)
+    if (
+      ctx.isOnlineGame &&
+      !ctx.isGameOver &&
+      (config.onlineAutoPlay || config.autonomousMode) &&
+      decision.allow &&
+      activeResult.lines &&
+      activeResult.lines.length > 0
+    ) {
+      const onlineProf = resolveOnlineProfile(config.autonomousEloProfile || config.targetElo);
+      if (fairPlayState.lockedOut && onlineProf.elo < 2800) return;
+
+      const controlledSide =
+        config.turnOverride === "w" || config.turnOverride === "b"
+          ? config.turnOverride
+          : ctx.playerColor;
+      if (turn !== controlledSide) return;
+      if (lastExecutedFenKey === fenActionKey) return;
+
+      const moveUci = activeResult.lines[0].uci;
+      const moveDelay = Math.max(120, Math.round(decision.autoMoveDelayMs || 700));
+      autoExecutionTimer = setTimeout(() => {
+        autoExecutionTimer = null;
+        if (!config.enabled || !(config.onlineAutoPlay || config.autonomousMode)) return;
+        if (fairPlayState.lockedOut && onlineProf.elo < 2800) return;
+        const live = readActiveBoard();
+        if (!live) return;
+        const liveCtx = detectBoardContext(live, turn);
+        if (liveCtx.isGameOver) return;
+        const livePlacement = gridToPlacement(live.grid);
+        if (`${livePlacement}` !== `${result.fen.split(" ")[0]}`) return;
+        lastExecutedFenKey = fenActionKey;
+        executeBoardMove(live, moveUci, turn, onlineProf.elo >= 2400);
+      }, moveDelay);
     }
   }
 
   function runAnalysis(force) {
     ensureOverlayUi();
-    if (!config.enabled || fairPlayState.lockedOut) {
+    if (!config.enabled || (fairPlayState.lockedOut && !(config.puzzleSolverEnabled && lastBoardContext && lastBoardContext.isPuzzle))) {
       clearOverlayVisuals();
       renderFairPlayPill();
       return;
@@ -1719,8 +2303,14 @@
       inferredTurn = turn;
     }
 
+    const boardContext = detectBoardContext(boardInfo, turn);
+    lastBoardContext = boardContext;
+
     if (!force && placement === lastPlacement && lastAnalysis && lastAnalysis.turn === turn) {
       renderOverlay(boardInfo, lastAnalysis.result, turn);
+      if (boardContext.isPuzzle && boardContext.puzzleStatus === "SOLVED" && config.puzzleAutoSolve && config.puzzleAutoNext) {
+        publishResult(boardInfo, turn, lastAnalysis.result, null, boardContext);
+      }
       return;
     }
 
@@ -1736,6 +2326,10 @@
         clearTimeout(humanizerDelayTimer);
         humanizerDelayTimer = null;
       }
+      if (autoExecutionTimer) {
+        clearTimeout(autoExecutionTimer);
+        autoExecutionTimer = null;
+      }
       lastPositionObservedAtMs = Date.now();
     }
 
@@ -1744,15 +2338,16 @@
     const castling = inferCastlingRights(boardInfo.grid);
     const fen = `${placement} ${turn} ${castling} - 0 1`;
     const seq = ++activeSearchSeq;
+    const effectiveConfig = resolveEffectiveEngineConfig(boardContext);
 
-    // Master Opening Book lookup (synchronous built-in + async Lichess Masters refresh)
-    if (window.ChessForgeOpeningBook && config.showOpeningBook) {
+    // Master Opening Book lookup (skipped inside puzzle solver mode so tactics aren't masked)
+    if (window.ChessForgeOpeningBook && config.showOpeningBook && !boardContext.isPuzzle) {
       lastOpeningBook = window.ChessForgeOpeningBook.lookup(fen, (bookData) => {
         if (seq !== activeSearchSeq || !bookData) return;
         lastOpeningBook = bookData;
         if (lastAnalysis && lastAnalysis.fen === fen) {
           lastAnalysis.result.lines = classifyCandidateAnnotations(lastAnalysis.result.lines, lastOpeningBook);
-          publishResult(boardInfo, turn, lastAnalysis.result, playedMove);
+          publishResult(boardInfo, turn, lastAnalysis.result, playedMove, boardContext);
         }
       });
     } else {
@@ -1765,7 +2360,7 @@
         if (seq !== activeSearchSeq || !tbData) return;
         lastTablebase = tbData;
         if (lastAnalysis && lastAnalysis.fen === fen) {
-          publishResult(boardInfo, turn, lastAnalysis.result, playedMove);
+          publishResult(boardInfo, turn, lastAnalysis.result, playedMove, boardContext);
         }
       });
     } else {
@@ -1778,15 +2373,15 @@
     if (hasChromeRuntime()) {
       try {
         chrome.runtime.sendMessage(
-          { type: "STOCKFISH_ANALYZE", fen, config },
+          { type: "STOCKFISH_ANALYZE", fen, config: effectiveConfig },
           (resp) => {
             if (seq !== activeSearchSeq) return;
             if (!chrome.runtime.lastError && resp && resp.ok && resp.result) {
               const enriched = enrichResult(fen, turn, resp.result);
-              publishResult(boardInfo, turn, enriched, playedMove);
+              publishResult(boardInfo, turn, enriched, playedMove, boardContext);
             } else {
               const fallback = runFallbackJsAnalysis(fen, turn);
-              if (fallback) publishResult(boardInfo, turn, fallback, playedMove);
+              if (fallback) publishResult(boardInfo, turn, fallback, playedMove, boardContext);
               else setStatus("ERROR");
             }
           }
@@ -1798,7 +2393,7 @@
 
     const fallback = runFallbackJsAnalysis(fen, turn);
     if (fallback && seq === activeSearchSeq) {
-      publishResult(boardInfo, turn, fallback, playedMove);
+      publishResult(boardInfo, turn, fallback, playedMove, boardContext);
     }
   }
 
@@ -1817,6 +2412,13 @@
       attributes: true,
       attributeFilter: ["class", "style", "data-piece", "data-turn", "data-flipped"]
     });
+    // Cancel pending auto-move immediately when physical human pointer touches the board
+    document.addEventListener("pointerdown", (ev) => {
+      if (ev && ev.isTrusted && !isDispatchingPointer && autoExecutionTimer) {
+        clearTimeout(autoExecutionTimer);
+        autoExecutionTimer = null;
+      }
+    }, { capture: true, passive: true });
     window.addEventListener("scroll", () => {
       if (lastAnalysis) {
         const b = readActiveBoard();
@@ -1839,14 +2441,18 @@
           config,
           engineStatus,
           fairPlay: fairPlayState.lastSnapshot,
-          lastAnalysis: lastAnalysis ? Object.assign({}, lastAnalysis.result, { openingBook: lastOpeningBook, tablebase: lastTablebase, boardTheme: lastBoardTheme, fairPlay: fairPlayState.lastSnapshot }) : null
+          boardContext: lastBoardContext,
+          lastAnalysis: lastAnalysis ? Object.assign({}, lastAnalysis.result, { openingBook: lastOpeningBook, tablebase: lastTablebase, boardTheme: lastBoardTheme, fairPlay: fairPlayState.lastSnapshot, boardContext: lastBoardContext }) : null
         });
       } else if (msg.type === "UPDATE_CONFIG") {
         config = Object.assign({}, config, msg.config || {});
+        if (overlayHost && typeof overlayHost._syncFabButtons === "function") overlayHost._syncFabButtons();
+        lastExecutedFenKey = "";
         if (hasChromeStorage()) chrome.storage.local.set(config);
         runAnalysis(true);
         sendResponse({ ok: true, engineStatus, lastAnalysis: lastAnalysis ? lastAnalysis.result : null });
       } else if (msg.type === "FORCE_ANALYZE") {
+        lastExecutedFenKey = "";
         runAnalysis(true);
         sendResponse({ ok: true, engineStatus, lastAnalysis: lastAnalysis ? lastAnalysis.result : null });
       } else if (msg.type === "CLEAR_FAIRPLAY_TELEMETRY") {
@@ -1858,6 +2464,8 @@
 
   window.__chessForgeUpdateConfig = function (partial) {
     config = Object.assign({}, config, partial || {});
+    if (overlayHost && typeof overlayHost._syncFabButtons === "function") overlayHost._syncFabButtons();
+    lastExecutedFenKey = "";
     if (config.fairPlayAuditorEnabled === false) {
       fairPlayState.lockedOut = false;
       fairPlayState.lockoutReason = null;

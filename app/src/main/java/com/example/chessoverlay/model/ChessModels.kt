@@ -9,7 +9,9 @@ enum class WorkspaceTab {
 enum class BrowserSitePreset(val label: String, val url: String) {
     PRACTICE("Practice", "file:///android_asset/practice_board.html"),
     LICHESS("Lichess", "https://lichess.org/analysis"),
-    CHESS_COM("Chess.com", "https://www.chess.com/analysis")
+    LICHESS_PUZZLES("Lichess Puzzles", "https://lichess.org/training"),
+    CHESS_COM("Chess.com", "https://www.chess.com/analysis"),
+    CHESS_COM_PUZZLES("Chess.com Puzzles", "https://www.chess.com/puzzles")
 }
 
 enum class EngineStatus(val label: String) {
@@ -141,13 +143,37 @@ enum class AutonomousEloProfile(
     val baseTemp: Float,
     val depth: Int
 ) {
+    ELO_800(800, "800", "800 Elo", "Beginner", 260, 1.45f, 8),
+    ELO_1000(1000, "1000", "1000 Elo", "Casual", 210, 1.25f, 10),
     ELO_1200(1200, "1200", "1200 Elo", "Club Novice", 165, 1.08f, 14),
     ELO_1600(1600, "1600", "1600 Elo", "Intermediate", 105, 0.78f, 16),
-    ELO_2000(2000, "2000", "2000 Elo", "Expert Candidate", 60, 0.50f, 18);
+    ELO_2000(2000, "2000", "2000 Elo", "Expert Candidate", 60, 0.50f, 18),
+    ELO_2400(2400, "2400", "2400 Elo", "Master / IM", 25, 0.25f, 20),
+    ELO_2800(2800, "2800", "2800 Elo", "Max GM Engine", 0, 0.0f, 20);
 
     companion object {
+        val supportedElos: List<Int> = entries.map { it.elo }
+
         fun fromElo(elo: Int): AutonomousEloProfile {
             return entries.firstOrNull { it.elo == elo } ?: ELO_1600
+        }
+    }
+}
+
+enum class PuzzleLevelMode(
+    val key: String,
+    val label: String,
+    val detail: String
+) {
+    ALL("all", "All Levels", "Adaptive D8–D20"),
+    EASY("easy", "Easy", "400–1100 • D8"),
+    MEDIUM("medium", "Club", "1100–1700 • D12"),
+    HARD("hard", "Expert", "1700–2200 • D16"),
+    MASTER("master", "GM", "2200+ • D20");
+
+    companion object {
+        fun fromKey(key: String?): PuzzleLevelMode {
+            return entries.firstOrNull { it.key.equals(key, ignoreCase = true) } ?: ALL
         }
     }
 }
@@ -174,7 +200,13 @@ data class BrowserExtensionConfig(
     val practiceAutoPlay: Boolean = false,
     val practiceHumanDelayMs: Int = 650,
     val autonomousMode: Boolean = false,
+    val onlineAutoPlay: Boolean = false,
     val autonomousEloProfile: Int = 1600,
+    val puzzleSolverEnabled: Boolean = false,
+    val puzzleAutoSolve: Boolean = false,
+    val puzzleAutoNext: Boolean = false,
+    val puzzleLevelMode: PuzzleLevelMode = PuzzleLevelMode.ALL,
+    val puzzleSolveDelayMs: Int = 450,
     val androidRuntimeMode: AndroidOverlayRuntimeMode = AndroidOverlayRuntimeMode.NATIVE_ACCESSIBILITY_OVERLAY,
     val accessibilityDispatcherEnabled: Boolean = false
 ) {
@@ -183,7 +215,11 @@ data class BrowserExtensionConfig(
             "w", "b" -> turnOverride
             else -> "auto"
         }
-        val safeEloProfile = if (autonomousEloProfile in listOf(1200, 1600, 2000)) autonomousEloProfile else 1600
+        val safeEloProfile = if (autonomousEloProfile in AutonomousEloProfile.supportedElos) {
+            autonomousEloProfile
+        } else {
+            1600
+        }
         return "{" +
             "enabled:$enabled," +
             "showArrows:$showArrows," +
@@ -206,7 +242,13 @@ data class BrowserExtensionConfig(
             "practiceAutoPlay:$practiceAutoPlay," +
             "practiceHumanDelayMs:${practiceHumanDelayMs.coerceIn(250, 2500)}," +
             "autonomousMode:$autonomousMode," +
+            "onlineAutoPlay:$onlineAutoPlay," +
             "autonomousEloProfile:$safeEloProfile," +
+            "puzzleSolverEnabled:$puzzleSolverEnabled," +
+            "puzzleAutoSolve:$puzzleAutoSolve," +
+            "puzzleAutoNext:$puzzleAutoNext," +
+            "puzzleLevelMode:'${puzzleLevelMode.key}'," +
+            "puzzleSolveDelayMs:${puzzleSolveDelayMs.coerceIn(150, 1500)}," +
             "androidRuntimeMode:'${androidRuntimeMode.key}'," +
             "accessibilityDispatcherEnabled:$accessibilityDispatcherEnabled" +
             "}"

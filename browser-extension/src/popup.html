@@ -64,6 +64,40 @@
       <button id="btn-clear-telemetry" type="button" style="background:#21262d;color:#f87171;border:1px solid #ef4444;">Clear Session Telemetry</button>
     </section>
 
+    <section class="card" id="puzzle-card">
+      <div class="card-title">
+        <span>Puzzle Solver (All Levels)</span>
+        <span id="puzzle-badge" class="pill-tag">OFF • Lichess &amp; Chess.com</span>
+      </div>
+      <div id="puzzle-summary" class="muted">Supports Rated, Storm, Streak, Racer &amp; Puzzle Rush/Battle.</div>
+      <div class="row">
+        <label for="toggle-puzzle-solver">Enable Puzzle Solver</label>
+        <input type="checkbox" id="toggle-puzzle-solver" />
+      </div>
+      <div class="row">
+        <label for="toggle-puzzle-autosolve">Auto-Solve Puzzle Moves</label>
+        <input type="checkbox" id="toggle-puzzle-autosolve" />
+      </div>
+      <div class="row">
+        <label for="select-puzzle-level">Puzzle Level Scaling</label>
+        <select id="select-puzzle-level">
+          <option value="all" selected>All Levels (Adaptive)</option>
+          <option value="easy">Easy (400–1100 • D8)</option>
+          <option value="medium">Club (1100–1700 • D12)</option>
+          <option value="hard">Expert (1700–2200 • D16)</option>
+          <option value="master">GM (2200+ • D20)</option>
+        </select>
+      </div>
+      <div class="row">
+        <label for="range-puzzle-delay">Solve Delay (<span id="puzzle-delay-val">450</span> ms)</label>
+        <input type="range" id="range-puzzle-delay" min="150" max="1500" step="50" value="450" />
+      </div>
+      <div class="row">
+        <label for="toggle-puzzle-autonext">Auto-Advance Next Puzzle</label>
+        <input type="checkbox" id="toggle-puzzle-autonext" />
+      </div>
+    </section>
+
     <section class="card">
       <div class="card-title">
         <span id="backend-label">Stockfish 19 Analysis</span>
@@ -126,15 +160,23 @@
         <input type="checkbox" id="toggle-humanizer" checked />
       </div>
       <div class="row">
+        <label for="toggle-online-autoplay">Online Auto-Play (Lichess &amp; Chess.com)</label>
+        <input type="checkbox" id="toggle-online-autoplay" />
+      </div>
+      <div class="row">
         <label for="toggle-autonomous">Autonomous Mode</label>
         <input type="checkbox" id="toggle-autonomous" />
       </div>
       <div class="row">
-        <label for="select-autonomous-elo">Move Selector Profile</label>
+        <label for="select-autonomous-elo">Online / Auto-Play Level</label>
         <select id="select-autonomous-elo">
+          <option value="800">800 Elo (Beginner)</option>
+          <option value="1000">1000 Elo (Casual)</option>
           <option value="1200">1200 Elo (Club Novice)</option>
           <option value="1600" selected>1600 Elo (Intermediate)</option>
-          <option value="2000">2000 Elo (Expert Candidate)</option>
+          <option value="2000">2000 Elo (Expert)</option>
+          <option value="2400">2400 Elo (Master / IM)</option>
+          <option value="2800">2800 Elo (Max GM Engine)</option>
         </select>
       </div>
       <div class="row">

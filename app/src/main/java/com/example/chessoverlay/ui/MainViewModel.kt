@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.chessoverlay.bridge.FairPlayTelemetryParser
 import com.example.chessoverlay.model.AnalysisLine
 import com.example.chessoverlay.model.AndroidOverlayRuntimeMode
+import com.example.chessoverlay.model.AutonomousEloProfile
 import com.example.chessoverlay.model.BoardThemeInfo
 import com.example.chessoverlay.model.BrowserAnalysisSnapshot
 import com.example.chessoverlay.model.BrowserExtensionConfig
@@ -19,6 +20,7 @@ import com.example.chessoverlay.model.FairPlayTelemetryModel
 import com.example.chessoverlay.model.MoveAnnotationInfo
 import com.example.chessoverlay.model.OpeningBookMove
 import com.example.chessoverlay.model.OpeningBookState
+import com.example.chessoverlay.model.PuzzleLevelMode
 import com.example.chessoverlay.model.TablebaseMove
 import com.example.chessoverlay.model.TablebaseState
 import com.example.chessoverlay.model.WorkspaceTab
@@ -207,10 +209,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setAutonomousMode(enabled: Boolean) = updateConfig { it.copy(autonomousMode = enabled) }
 
+    fun setOnlineAutoPlay(enabled: Boolean) = updateConfig { it.copy(onlineAutoPlay = enabled) }
+
     fun setAutonomousEloProfile(elo: Int) {
-        val safeElo = if (elo in listOf(1200, 1600, 2000)) elo else 1600
+        val safeElo = if (elo in AutonomousEloProfile.supportedElos) elo else 1600
         updateConfig { it.copy(autonomousEloProfile = safeElo) }
     }
+
+    fun setPuzzleSolverEnabled(enabled: Boolean) =
+        updateConfig { it.copy(puzzleSolverEnabled = enabled) }
+
+    fun setPuzzleAutoSolve(enabled: Boolean) =
+        updateConfig {
+            it.copy(
+                puzzleAutoSolve = enabled,
+                puzzleSolverEnabled = if (enabled) true else it.puzzleSolverEnabled
+            )
+        }
+
+    fun setPuzzleAutoNext(enabled: Boolean) =
+        updateConfig { it.copy(puzzleAutoNext = enabled) }
+
+    fun setPuzzleLevelMode(mode: PuzzleLevelMode) =
+        updateConfig { it.copy(puzzleLevelMode = mode) }
+
+    fun setPuzzleSolveDelayMs(delayMs: Int) =
+        updateConfig { it.copy(puzzleSolveDelayMs = delayMs.coerceIn(150, 1500)) }
 
     fun setAndroidRuntimeMode(mode: AndroidOverlayRuntimeMode) =
         updateConfig { it.copy(androidRuntimeMode = mode) }

@@ -9,9 +9,11 @@ import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.chessoverlay.model.AutonomousEloProfile
 import com.example.chessoverlay.model.BrowserExtensionConfig
 import com.example.chessoverlay.model.CpuUsageProfile
 import com.example.chessoverlay.model.EvalBarOrientation
+import com.example.chessoverlay.model.PuzzleLevelMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
@@ -54,9 +56,15 @@ class PreferencesRepository(private val context: Context) {
             practiceAutoPlay = prefs[KEY_PRACTICE_AUTO] ?: false,
             practiceHumanDelayMs = (prefs[KEY_PRACTICE_DELAY] ?: 650).coerceIn(250, 2500),
             autonomousMode = prefs[KEY_AUTONOMOUS_MODE] ?: false,
+            onlineAutoPlay = prefs[KEY_ONLINE_AUTOPLAY] ?: false,
             autonomousEloProfile = (prefs[KEY_AUTONOMOUS_ELO_PROFILE] ?: 1600).let {
-                if (it in listOf(1200, 1600, 2000)) it else 1600
-            }
+                if (it in AutonomousEloProfile.supportedElos) it else 1600
+            },
+            puzzleSolverEnabled = prefs[KEY_PUZZLE_SOLVER] ?: false,
+            puzzleAutoSolve = prefs[KEY_PUZZLE_AUTOSOLVE] ?: false,
+            puzzleAutoNext = prefs[KEY_PUZZLE_AUTONEXT] ?: false,
+            puzzleLevelMode = PuzzleLevelMode.fromKey(prefs[KEY_PUZZLE_LEVEL_MODE]),
+            puzzleSolveDelayMs = (prefs[KEY_PUZZLE_DELAY_MS] ?: 450).coerceIn(150, 1500)
         )
     }
 
@@ -83,7 +91,17 @@ class PreferencesRepository(private val context: Context) {
             prefs[KEY_PRACTICE_AUTO] = config.practiceAutoPlay
             prefs[KEY_PRACTICE_DELAY] = config.practiceHumanDelayMs.coerceIn(250, 2500)
             prefs[KEY_AUTONOMOUS_MODE] = config.autonomousMode
-            prefs[KEY_AUTONOMOUS_ELO_PROFILE] = if (config.autonomousEloProfile in listOf(1200, 1600, 2000)) config.autonomousEloProfile else 1600
+            prefs[KEY_ONLINE_AUTOPLAY] = config.onlineAutoPlay
+            prefs[KEY_AUTONOMOUS_ELO_PROFILE] = if (config.autonomousEloProfile in AutonomousEloProfile.supportedElos) {
+                config.autonomousEloProfile
+            } else {
+                1600
+            }
+            prefs[KEY_PUZZLE_SOLVER] = config.puzzleSolverEnabled
+            prefs[KEY_PUZZLE_AUTOSOLVE] = config.puzzleAutoSolve
+            prefs[KEY_PUZZLE_AUTONEXT] = config.puzzleAutoNext
+            prefs[KEY_PUZZLE_LEVEL_MODE] = config.puzzleLevelMode.key
+            prefs[KEY_PUZZLE_DELAY_MS] = config.puzzleSolveDelayMs.coerceIn(150, 1500)
         }
     }
 
@@ -95,7 +113,7 @@ class PreferencesRepository(private val context: Context) {
 
     suspend fun setAutonomousEloProfile(elo: Int) {
         context.chessForgeDataStore.edit { prefs ->
-            prefs[KEY_AUTONOMOUS_ELO_PROFILE] = if (elo in listOf(1200, 1600, 2000)) elo else 1600
+            prefs[KEY_AUTONOMOUS_ELO_PROFILE] = if (elo in AutonomousEloProfile.supportedElos) elo else 1600
         }
     }
 
@@ -129,7 +147,13 @@ class PreferencesRepository(private val context: Context) {
         private val KEY_PRACTICE_AUTO = booleanPreferencesKey("ext_practice_auto")
         private val KEY_PRACTICE_DELAY = intPreferencesKey("ext_practice_delay")
         private val KEY_AUTONOMOUS_MODE = booleanPreferencesKey("ext_autonomous_mode")
+        private val KEY_ONLINE_AUTOPLAY = booleanPreferencesKey("ext_online_autoplay")
         private val KEY_AUTONOMOUS_ELO_PROFILE = intPreferencesKey("ext_autonomous_elo_profile")
+        private val KEY_PUZZLE_SOLVER = booleanPreferencesKey("ext_puzzle_solver")
+        private val KEY_PUZZLE_AUTOSOLVE = booleanPreferencesKey("ext_puzzle_autosolve")
+        private val KEY_PUZZLE_AUTONEXT = booleanPreferencesKey("ext_puzzle_autonext")
+        private val KEY_PUZZLE_LEVEL_MODE = stringPreferencesKey("ext_puzzle_level_mode")
+        private val KEY_PUZZLE_DELAY_MS = intPreferencesKey("ext_puzzle_delay_ms")
         private val KEY_TELEMETRY_WINDOW_JSON = stringPreferencesKey("ext_telemetry_window_json")
         private val KEY_TELEMETRY_LAST_RESET_MS = stringPreferencesKey("ext_telemetry_last_reset_ms")
     }

@@ -78,6 +78,7 @@ import com.example.chessoverlay.model.CpuUsageProfile
 import com.example.chessoverlay.model.EngineStatus
 import com.example.chessoverlay.model.EvalBarOrientation
 import com.example.chessoverlay.model.FairPlayTelemetryModel
+import com.example.chessoverlay.model.PuzzleLevelMode
 import com.example.chessoverlay.model.WorkspaceTab
 import com.example.chessoverlay.ui.components.EngineStatusIndicator
 import com.example.chessoverlay.ui.components.EvaluationBar
@@ -125,7 +126,13 @@ fun ChessForgeScreen(
     onSelectTargetElo: (Int) -> Unit = {},
     onClearSessionTelemetry: () -> Unit = {},
     onToggleAutonomousMode: (Boolean) -> Unit = {},
+    onToggleOnlineAutoPlay: (Boolean) -> Unit = {},
     onSelectAutonomousEloProfile: (Int) -> Unit = {},
+    onTogglePuzzleSolver: (Boolean) -> Unit = {},
+    onTogglePuzzleAutoSolve: (Boolean) -> Unit = {},
+    onTogglePuzzleAutoNext: (Boolean) -> Unit = {},
+    onSelectPuzzleLevelMode: (PuzzleLevelMode) -> Unit = {},
+    onChangePuzzleDelay: (Int) -> Unit = {},
     onTogglePracticeAutoPlay: (Boolean) -> Unit,
     onChangePracticeDelay: (Int) -> Unit,
     onSelectPreset: (BrowserSitePreset) -> Unit,
@@ -231,6 +238,11 @@ fun ChessForgeScreen(
                         onSelectPreset = onSelectPreset,
                         onNavigateUrl = onNavigateUrl,
                         onToggleEnabled = onToggleEnabled,
+                        onToggleOnlineAutoPlay = { enabled ->
+                            onToggleOnlineAutoPlay(enabled)
+                            if (!enabled) onToggleAutonomousMode(false)
+                        },
+                        onTogglePuzzleAutoSolve = onTogglePuzzleAutoSolve,
                         onSelectDepth = onSelectDepth,
                         onSelectCpuProfile = onSelectCpuProfile,
                         onSelectEvalOrientation = onSelectEvalOrientation,
@@ -265,7 +277,13 @@ fun ChessForgeScreen(
                         onSelectTargetElo = onSelectTargetElo,
                         onClearSessionTelemetry = onClearSessionTelemetry,
                         onToggleAutonomousMode = onToggleAutonomousMode,
+                        onToggleOnlineAutoPlay = onToggleOnlineAutoPlay,
                         onSelectAutonomousEloProfile = onSelectAutonomousEloProfile,
+                        onTogglePuzzleSolver = onTogglePuzzleSolver,
+                        onTogglePuzzleAutoSolve = onTogglePuzzleAutoSolve,
+                        onTogglePuzzleAutoNext = onTogglePuzzleAutoNext,
+                        onSelectPuzzleLevelMode = onSelectPuzzleLevelMode,
+                        onChangePuzzleDelay = onChangePuzzleDelay,
                         onTogglePracticeAutoPlay = onTogglePracticeAutoPlay,
                         onChangePracticeDelay = onChangePracticeDelay
                     )

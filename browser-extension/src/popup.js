@@ -42,7 +42,16 @@
   const elElo = document.getElementById("select-elo");
   const elHumanizer = document.getElementById("toggle-humanizer");
   const elAutonomous = document.getElementById("toggle-autonomous");
+  const elOnlineAutoPlay = document.getElementById("toggle-online-autoplay");
   const elAutonomousElo = document.getElementById("select-autonomous-elo");
+  const elPuzzleBadge = document.getElementById("puzzle-badge");
+  const elPuzzleSummary = document.getElementById("puzzle-summary");
+  const elPuzzleSolver = document.getElementById("toggle-puzzle-solver");
+  const elPuzzleAutoSolve = document.getElementById("toggle-puzzle-autosolve");
+  const elPuzzleLevel = document.getElementById("select-puzzle-level");
+  const elPuzzleDelay = document.getElementById("range-puzzle-delay");
+  const elPuzzleDelayVal = document.getElementById("puzzle-delay-val");
+  const elPuzzleAutoNext = document.getElementById("toggle-puzzle-autonext");
   const elFairPlayToggle = document.getElementById("toggle-fairplay");
   const elClearTelemetry = document.getElementById("btn-clear-telemetry");
   const elTurn = document.getElementById("select-turn");
@@ -75,7 +84,13 @@
     autoAdaptTheme: true,
     showHud: true,
     autonomousMode: false,
-    autonomousEloProfile: 1600
+    onlineAutoPlay: false,
+    autonomousEloProfile: 1600,
+    puzzleSolverEnabled: false,
+    puzzleAutoSolve: false,
+    puzzleAutoNext: false,
+    puzzleLevelMode: "all",
+    puzzleSolveDelayMs: 450
   };
 
   function renderStatus(status, backend) {
@@ -198,6 +213,26 @@
     renderFairPlay(result.fairPlay);
     renderOpeningBook(result.openingBook);
     renderTablebase(result.tablebase);
+    if (elPuzzleBadge && elPuzzleSummary) {
+      const ctx = result.boardContext || {};
+      const solverOn = elPuzzleSolver ? elPuzzleSolver.checked : false;
+      const autoOn = elPuzzleAutoSolve ? elPuzzleAutoSolve.checked : false;
+      if (ctx.isPuzzle) {
+        const modeTag = (ctx.puzzleMode || "puzzle").toUpperCase();
+        const ratingTag = ctx.puzzleRating ? ` • ${ctx.puzzleRating}` : "";
+        elPuzzleBadge.textContent = `${modeTag}${ratingTag} • ${ctx.puzzleStatus || "SOLVING"}`;
+        elPuzzleBadge.style.borderColor = solverOn ? "#38bdf8" : "#30363d";
+        elPuzzleBadge.style.color = solverOn ? "#38bdf8" : "#8b949e";
+        elPuzzleSummary.textContent = autoOn
+          ? `Auto-Solve ACTIVE (${ctx.playerColor === "b" ? "Black" : "White"} to solve)`
+          : (solverOn ? "Puzzle Hint highlight ACTIVE — enable Auto-Solve to execute moves." : "Puzzle detected on board. Toggle Enable Puzzle Solver above.");
+      } else {
+        elPuzzleBadge.textContent = solverOn ? (autoOn ? "AUTO ARMED" : "HINT ARMED") : "OFF • Lichess & Chess.com";
+        elPuzzleBadge.style.borderColor = solverOn ? "#38bdf8" : "#30363d";
+        elPuzzleBadge.style.color = solverOn ? "#38bdf8" : "#8b949e";
+        elPuzzleSummary.textContent = "Supports Rated, Storm, Streak, Racer & Puzzle Rush/Battle.";
+      }
+    }
 
     const top = result.lines[0];
     const pct = top.whiteWinPct !== undefined ? top.whiteWinPct : top.winPct;
@@ -281,7 +316,16 @@
     if (elElo) elElo.value = String(data.targetElo || 1500);
     if (elHumanizer) elHumanizer.checked = data.humanizerEnabled !== false;
     if (elAutonomous) elAutonomous.checked = data.autonomousMode === true;
+    if (elOnlineAutoPlay) elOnlineAutoPlay.checked = data.onlineAutoPlay === true;
     if (elAutonomousElo) elAutonomousElo.value = String(data.autonomousEloProfile || 1600);
+    if (elPuzzleSolver) elPuzzleSolver.checked = data.puzzleSolverEnabled === true;
+    if (elPuzzleAutoSolve) elPuzzleAutoSolve.checked = data.puzzleAutoSolve === true;
+    if (elPuzzleLevel) elPuzzleLevel.value = data.puzzleLevelMode || "all";
+    if (elPuzzleDelay) {
+      elPuzzleDelay.value = String(data.puzzleSolveDelayMs || 450);
+      if (elPuzzleDelayVal) elPuzzleDelayVal.textContent = elPuzzleDelay.value;
+    }
+    if (elPuzzleAutoNext) elPuzzleAutoNext.checked = data.puzzleAutoNext === true;
     if (elFairPlayToggle) elFairPlayToggle.checked = data.fairPlayAuditorEnabled !== false;
     elTurn.value = data.turnOverride || "auto";
     elEvalBar.checked = data.showEvalBar !== false;
@@ -318,8 +362,19 @@
   elMultiPv.addEventListener("change", () => pushConfigToActiveTab({ multiPv: parseInt(elMultiPv.value, 10) }));
   if (elElo) elElo.addEventListener("change", () => pushConfigToActiveTab({ targetElo: parseInt(elElo.value, 10) }));
   if (elHumanizer) elHumanizer.addEventListener("change", () => pushConfigToActiveTab({ humanizerEnabled: elHumanizer.checked }));
+  if (elOnlineAutoPlay) elOnlineAutoPlay.addEventListener("change", () => pushConfigToActiveTab({ onlineAutoPlay: elOnlineAutoPlay.checked }));
   if (elAutonomous) elAutonomous.addEventListener("change", () => pushConfigToActiveTab({ autonomousMode: elAutonomous.checked }));
   if (elAutonomousElo) elAutonomousElo.addEventListener("change", () => pushConfigToActiveTab({ autonomousEloProfile: parseInt(elAutonomousElo.value, 10) }));
+  if (elPuzzleSolver) elPuzzleSolver.addEventListener("change", () => pushConfigToActiveTab({ puzzleSolverEnabled: elPuzzleSolver.checked }));
+  if (elPuzzleAutoSolve) elPuzzleAutoSolve.addEventListener("change", () => pushConfigToActiveTab({ puzzleAutoSolve: elPuzzleAutoSolve.checked }));
+  if (elPuzzleLevel) elPuzzleLevel.addEventListener("change", () => pushConfigToActiveTab({ puzzleLevelMode: elPuzzleLevel.value }));
+  if (elPuzzleDelay) {
+    elPuzzleDelay.addEventListener("input", () => {
+      if (elPuzzleDelayVal) elPuzzleDelayVal.textContent = elPuzzleDelay.value;
+    });
+    elPuzzleDelay.addEventListener("change", () => pushConfigToActiveTab({ puzzleSolveDelayMs: parseInt(elPuzzleDelay.value, 10) }));
+  }
+  if (elPuzzleAutoNext) elPuzzleAutoNext.addEventListener("change", () => pushConfigToActiveTab({ puzzleAutoNext: elPuzzleAutoNext.checked }));
   if (elFairPlayToggle) elFairPlayToggle.addEventListener("change", () => pushConfigToActiveTab({ fairPlayAuditorEnabled: elFairPlayToggle.checked }));
   if (elClearTelemetry) {
     elClearTelemetry.addEventListener("click", () => {

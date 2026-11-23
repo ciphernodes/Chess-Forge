@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoMode
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Psychology
@@ -56,6 +57,7 @@ import com.example.chessoverlay.model.CpuUsageProfile
 import com.example.chessoverlay.model.EngineStatus
 import com.example.chessoverlay.model.EvalBarOrientation
 import com.example.chessoverlay.model.FairPlayStatus
+import com.example.chessoverlay.model.PuzzleLevelMode
 import com.example.chessoverlay.ui.components.EngineStatusIndicator
 import com.example.chessoverlay.ui.components.FairPlayStatusIndicator
 import com.example.chessoverlay.ui.theme.CarbonSurface
@@ -91,7 +93,13 @@ fun SettingsScreen(
     onSelectTargetElo: (Int) -> Unit = {},
     onClearSessionTelemetry: () -> Unit = {},
     onToggleAutonomousMode: (Boolean) -> Unit = {},
+    onToggleOnlineAutoPlay: (Boolean) -> Unit = {},
     onSelectAutonomousEloProfile: (Int) -> Unit = {},
+    onTogglePuzzleSolver: (Boolean) -> Unit = {},
+    onTogglePuzzleAutoSolve: (Boolean) -> Unit = {},
+    onTogglePuzzleAutoNext: (Boolean) -> Unit = {},
+    onSelectPuzzleLevelMode: (PuzzleLevelMode) -> Unit = {},
+    onChangePuzzleDelay: (Int) -> Unit = {},
     onTogglePracticeAutoPlay: (Boolean) -> Unit,
     onChangePracticeDelay: (Int) -> Unit
 ) {
@@ -251,17 +259,18 @@ fun SettingsScreen(
                 }
             }
 
-            // Autonomous Mode & Move Selector Card
+            // Online Auto-Play & Autonomous Move Selector Card
             SettingsSectionCard(
-                title = "Autonomous Mode & Move Selector",
+                title = "Online Auto-Play & Level Selector",
                 icon = Icons.Default.AutoMode
             ) {
                 val activeProfile = AutonomousEloProfile.fromElo(config.autonomousEloProfile)
+                val autoPlayArmed = config.autonomousMode || config.onlineAutoPlay
 
                 Surface(
                     shape = RoundedCornerShape(10.dp),
-                    color = if (config.autonomousMode) TacticalEmerald.copy(alpha = 0.16f) else CarbonSurfaceHigh,
-                    border = BorderStroke(1.dp, if (config.autonomousMode) TacticalEmerald.copy(alpha = 0.6f) else HairlineBorder),
+                    color = if (autoPlayArmed) TacticalEmerald.copy(alpha = 0.16f) else CarbonSurfaceHigh,
+                    border = BorderStroke(1.dp, if (autoPlayArmed) TacticalEmerald.copy(alpha = 0.6f) else HairlineBorder),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
@@ -269,20 +278,20 @@ fun SettingsScreen(
                         verticalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
                         Text(
-                            text = if (config.autonomousMode) {
-                                "Autonomous Mode Active • ${activeProfile.title} (${activeProfile.subtitle})"
+                            text = if (autoPlayArmed) {
+                                "Online Auto-Play Active • ${activeProfile.title} (${activeProfile.subtitle})"
                             } else {
-                                "Autonomous Mode Paused • Profile: ${activeProfile.title}"
+                                "Online Auto-Play Paused • Level: ${activeProfile.title}"
                             },
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
-                            color = if (config.autonomousMode) TacticalEmerald else MaterialTheme.colorScheme.onSurface
+                            color = if (autoPlayArmed) TacticalEmerald else MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = if (config.autonomousMode) {
-                                "Kinematic Bézier cursor drag • 40–110 ms dwell • Log-normal reaction scheduling"
+                            text = if (autoPlayArmed) {
+                                "Plays live/daily Lichess & Chess.com games on your turn • Kinematic Bézier drag & click"
                             } else {
-                                "Enable to activate rating-calibrated move selection with realistic pointer execution."
+                                "Enable Online Auto-Play or Autonomous Mode to play moves automatically from 800 to 2800 Elo."
                             },
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -291,8 +300,16 @@ fun SettingsScreen(
                 }
 
                 SettingsToggleItem(
+                    title = "Online Auto-Play (Lichess & Chess.com)",
+                    subtitle = "Automatically executes calibrated moves on your turn in live and daily online games",
+                    checked = config.onlineAutoPlay,
+                    testTag = "settings_switch_online_autoplay",
+                    onCheckedChange = onToggleOnlineAutoPlay
+                )
+
+                SettingsToggleItem(
                     title = "Autonomous Mode",
-                    subtitle = "Autonomous move selection with kinematic pointer drag execution and reaction-time scheduling",
+                    subtitle = "Full autonomous move selection with kinematic pointer drag execution and reaction-time scheduling",
                     checked = config.autonomousMode,
                     testTag = "settings_switch_autonomous_mode",
                     onCheckedChange = onToggleAutonomousMode
@@ -305,7 +322,7 @@ fun SettingsScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Move Selector Elo Profile",
+                            text = "Play Strength Level (All Levels)",
                             style = MaterialTheme.typography.bodyLarge,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface
@@ -319,14 +336,16 @@ fun SettingsScreen(
                     }
 
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         AutonomousEloProfile.entries.forEach { profile ->
                             val active = config.autonomousEloProfile == profile.elo
                             Surface(
                                 modifier = Modifier
-                                    .weight(1f)
+                                    .width(106.dp)
                                     .height(72.dp)
                                     .clip(RoundedCornerShape(12.dp))
                                     .clickable { onSelectAutonomousEloProfile(profile.elo) }
@@ -383,12 +402,138 @@ fun SettingsScreen(
                         Text(
                             text = "• Rating: ${activeProfile.elo} Elo | Blunder Cap: max ${activeProfile.blunderCapCp} cp loss\n" +
                                 "• Search Depth: D${activeProfile.depth} | Boltzmann Temp: T = ${activeProfile.baseTemp}\n" +
-                                "• Kinematic Pointer: 2D Gaussian jitter (inner 60% clamp) & 40–110 ms dwell\n" +
+                                "• Kinematic Pointer: 2D Gaussian jitter (inner 60% clamp) & drag + click fallback\n" +
                                 "• Time Trouble: < 15s remaining triggers panic search & faster pacing",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                }
+            }
+
+            // All-Level Puzzle Solver Card (Lichess & Chess.com)
+            SettingsSectionCard(
+                title = "Puzzle Solver (All Levels)",
+                icon = Icons.Default.Extension
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (config.puzzleSolverEnabled) TacticalAmber.copy(alpha = 0.14f) else CarbonSurfaceHigh,
+                    border = BorderStroke(1.dp, if (config.puzzleSolverEnabled) TacticalAmber.copy(alpha = 0.6f) else HairlineBorder),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(
+                            text = when {
+                                config.puzzleSolverEnabled && config.puzzleAutoSolve -> "Puzzle Auto-Solver Armed • ${config.puzzleLevelMode.label} (${config.puzzleLevelMode.detail})"
+                                config.puzzleSolverEnabled -> "Puzzle Hint Mode Armed • ${config.puzzleLevelMode.label}"
+                                else -> "Puzzle Solver Off • Rated, Storm, Streak, Racer & Rush/Battle"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = if (config.puzzleSolverEnabled) TacticalAmber else MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Prioritizes shortest forced mates and tactical wins across every Lichess & Chess.com puzzle rating tier.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                SettingsToggleItem(
+                    title = "Enable Puzzle Solver",
+                    subtitle = "Detects tactical puzzles (Training, Storm, Streak, Racer, Rush, Battle) and computes winning lines",
+                    checked = config.puzzleSolverEnabled,
+                    testTag = "settings_switch_puzzle_solver",
+                    onCheckedChange = onTogglePuzzleSolver
+                )
+
+                SettingsToggleItem(
+                    title = "Auto-Solve Puzzle Moves",
+                    subtitle = "Automatically plays each puzzle solution move (with promotion dialog handling)",
+                    checked = config.puzzleAutoSolve,
+                    testTag = "settings_switch_puzzle_autosolve",
+                    onCheckedChange = onTogglePuzzleAutoSolve
+                )
+
+                SettingsToggleItem(
+                    title = "Auto-Advance Next Puzzle",
+                    subtitle = "Automatically clicks Next/Continue once a puzzle is marked solved",
+                    checked = config.puzzleAutoNext,
+                    testTag = "settings_switch_puzzle_autonext",
+                    onCheckedChange = onTogglePuzzleAutoNext
+                )
+
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Puzzle Depth Tier",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = config.puzzleLevelMode.detail,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = TacticalAmber
+                        )
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        PuzzleLevelMode.entries.forEach { mode ->
+                            FilterChip(
+                                selected = config.puzzleLevelMode == mode,
+                                onClick = { onSelectPuzzleLevelMode(mode) },
+                                label = { Text(mode.label, maxLines = 1) },
+                                modifier = Modifier
+                                    .height(48.dp)
+                                    .testTag("settings_puzzle_level_${mode.key}"),
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = TacticalAmber.copy(alpha = 0.22f),
+                                    selectedLabelColor = TacticalAmber
+                                )
+                            )
+                        }
+                    }
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Puzzle Move Delay",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "${config.puzzleSolveDelayMs} ms",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = TacticalAmber
+                        )
+                    }
+                    Slider(
+                        value = config.puzzleSolveDelayMs.toFloat(),
+                        onValueChange = { onChangePuzzleDelay((it / 50f).roundToInt() * 50) },
+                        valueRange = 150f..1500f,
+                        colors = SliderDefaults.colors(
+                            thumbColor = TacticalAmber,
+                            activeTrackColor = TacticalAmber
+                        ),
+                        modifier = Modifier.testTag("settings_puzzle_delay_slider")
+                    )
                 }
             }
 
