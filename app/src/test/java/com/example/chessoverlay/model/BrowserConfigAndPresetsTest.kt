@@ -58,7 +58,10 @@ class BrowserConfigAndPresetsTest {
 
     @Test
     fun `site presets and puzzle level modes resolve expected routes and keys`() {
+        assertEquals("https://lichess.org/", BrowserSitePreset.LICHESS_PLAY.url)
         assertEquals("https://lichess.org/training", BrowserSitePreset.LICHESS_PUZZLES.url)
+        assertEquals("https://www.chess.com/play/online", BrowserSitePreset.CHESS_COM_PLAY.url)
+        assertEquals("https://www.chess.com/play/computer", BrowserSitePreset.CHESS_COM_BOTS.url)
         assertEquals("https://www.chess.com/puzzles", BrowserSitePreset.CHESS_COM_PUZZLES.url)
         assertEquals("https://lichess.org/analysis", BrowserSitePreset.LICHESS.url)
         assertEquals("https://www.chess.com/analysis", BrowserSitePreset.CHESS_COM.url)

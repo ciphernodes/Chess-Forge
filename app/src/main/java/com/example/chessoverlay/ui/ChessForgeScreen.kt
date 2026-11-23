@@ -242,6 +242,7 @@ fun ChessForgeScreen(
                             onToggleOnlineAutoPlay(enabled)
                             if (!enabled) onToggleAutonomousMode(false)
                         },
+                        onSelectAutonomousEloProfile = onSelectAutonomousEloProfile,
                         onTogglePuzzleAutoSolve = onTogglePuzzleAutoSolve,
                         onSelectDepth = onSelectDepth,
                         onSelectCpuProfile = onSelectCpuProfile,

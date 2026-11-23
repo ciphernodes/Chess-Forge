@@ -177,4 +177,46 @@ describe("Online Auto-Play & All-Level Puzzle Solver Controller", () => {
     });
     assert.equal(solvedPuzzleNext.action, "PUZZLE_NEXT");
   });
+
+  it("supports normal live and bot games on Lichess, Chess.com, and Practice Board", () => {
+    const botGameCtx = classifySiteAndPuzzleMode({
+      hostname: "www.chess.com",
+      pathname: "/play/computer",
+      isBoardFlipped: false,
+      currentTurn: "w",
+    });
+    assert.equal(botGameCtx.isPuzzle, false);
+    assert.equal(botGameCtx.isOnlineGame, true);
+
+    const botMove = evaluateExecutionAction({
+      context: botGameCtx,
+      puzzleConfig: DEFAULT_PUZZLE_SOLVER_CONFIG,
+      onlineConfig: { enabled: true, eloLevel: 1600, turnOverride: "auto" },
+      practiceAutoPlay: false,
+      practiceDelayMs: 650,
+      autonomousMode: false,
+      fairPlayLockedOut: false,
+      candidateLines: [{ rank: 1, move: "d2d4", centipawns: 25, depth: 16 }],
+    });
+    assert.equal(botMove.action, "ONLINE_MOVE");
+    assert.equal(botMove.selectedMoveUci, "d2d4");
+
+    const practiceCtx = classifySiteAndPuzzleMode({
+      hostname: "",
+      pathname: "/android_asset/practice_board.html",
+      isPracticeBoard: true,
+      currentTurn: "w",
+    });
+    const practiceMove = evaluateExecutionAction({
+      context: practiceCtx,
+      puzzleConfig: DEFAULT_PUZZLE_SOLVER_CONFIG,
+      onlineConfig: { enabled: true, eloLevel: 1200, turnOverride: "auto" },
+      practiceAutoPlay: false,
+      practiceDelayMs: 500,
+      autonomousMode: false,
+      fairPlayLockedOut: false,
+      candidateLines: [{ rank: 1, move: "e2e4", centipawns: 20, depth: 14 }],
+    });
+    assert.equal(practiceMove.action, "PRACTICE_MOVE");
+  });
 });

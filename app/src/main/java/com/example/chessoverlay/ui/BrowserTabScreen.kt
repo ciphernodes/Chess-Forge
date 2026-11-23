@@ -79,6 +79,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.example.chessoverlay.bridge.AccessibilityDispatcher
 import com.example.chessoverlay.bridge.ChessForgeAndroidBridge
 import com.example.chessoverlay.bridge.WebViewCompatHelper
+import com.example.chessoverlay.model.AutonomousEloProfile
 import com.example.chessoverlay.model.BrowserAnalysisSnapshot
 import com.example.chessoverlay.model.BrowserExtensionConfig
 import com.example.chessoverlay.model.BrowserSitePreset
@@ -111,6 +112,7 @@ fun BrowserWorkspaceTab(
     onNavigateUrl: (String) -> Unit,
     onToggleEnabled: (Boolean) -> Unit,
     onToggleOnlineAutoPlay: (Boolean) -> Unit = {},
+    onSelectAutonomousEloProfile: (Int) -> Unit = {},
     onTogglePuzzleAutoSolve: (Boolean) -> Unit = {},
     onSelectDepth: (Int) -> Unit,
     onSelectCpuProfile: (CpuUsageProfile) -> Unit,
@@ -325,6 +327,40 @@ fun BrowserWorkspaceTab(
                         expanded = quickMenuExpanded,
                         onDismissRequest = { quickMenuExpanded = false }
                     ) {
+                        val gameAutoOn = extensionConfig.onlineAutoPlay || extensionConfig.autonomousMode
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = if (gameAutoOn) {
+                                        "Normal Game Auto-Play: ON (${extensionConfig.autonomousEloProfile} Elo)"
+                                    } else {
+                                        "Normal Game Auto-Play: OFF"
+                                    },
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (gameAutoOn) TacticalEmerald else MaterialTheme.colorScheme.onSurface
+                                )
+                            },
+                            trailingIcon = if (gameAutoOn) {
+                                { Icon(Icons.Default.Check, contentDescription = null, tint = TacticalEmerald) }
+                            } else null,
+                            onClick = {
+                                onToggleOnlineAutoPlay(!gameAutoOn)
+                                quickMenuExpanded = false
+                            }
+                        )
+                        AutonomousEloProfile.entries.forEach { prof ->
+                            DropdownMenuItem(
+                                text = { Text("Auto-Play Level: ${prof.elo} Elo (${prof.subtitle})") },
+                                trailingIcon = if (extensionConfig.autonomousEloProfile == prof.elo) {
+                                    { Icon(Icons.Default.Check, contentDescription = null, tint = TacticalEmerald) }
+                                } else null,
+                                onClick = {
+                                    onSelectAutonomousEloProfile(prof.elo)
+                                    quickMenuExpanded = false
+                                }
+                            )
+                        }
+                        HorizontalDivider()
                         listOf(6, 10, 14, 18, 20).forEach { d ->
                             DropdownMenuItem(
                                 text = { Text("Analysis Depth: D$d") },
@@ -437,7 +473,7 @@ fun BrowserWorkspaceTab(
                         onClick = { onToggleOnlineAutoPlay(!onlineOn) },
                         label = {
                             Text(
-                                text = if (onlineOn) "Auto ${extensionConfig.autonomousEloProfile}" else "Auto OFF",
+                                text = if (onlineOn) "Game Auto ${extensionConfig.autonomousEloProfile}" else "Game Auto OFF",
                                 maxLines = 1
                             )
                         },

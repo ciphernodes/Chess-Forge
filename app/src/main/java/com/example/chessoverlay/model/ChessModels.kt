@@ -8,9 +8,12 @@ enum class WorkspaceTab {
 
 enum class BrowserSitePreset(val label: String, val url: String) {
     PRACTICE("Practice", "file:///android_asset/practice_board.html"),
-    LICHESS("Lichess", "https://lichess.org/analysis"),
+    LICHESS_PLAY("Lichess Play", "https://lichess.org/"),
+    LICHESS("Lichess Analysis", "https://lichess.org/analysis"),
     LICHESS_PUZZLES("Lichess Puzzles", "https://lichess.org/training"),
-    CHESS_COM("Chess.com", "https://www.chess.com/analysis"),
+    CHESS_COM_PLAY("Chess.com Play", "https://www.chess.com/play/online"),
+    CHESS_COM_BOTS("Chess.com Bots", "https://www.chess.com/play/computer"),
+    CHESS_COM("Chess.com Analysis", "https://www.chess.com/analysis"),
     CHESS_COM_PUZZLES("Chess.com Puzzles", "https://www.chess.com/puzzles")
 }
 

@@ -43,6 +43,8 @@
   const elHumanizer = document.getElementById("toggle-humanizer");
   const elAutonomous = document.getElementById("toggle-autonomous");
   const elOnlineAutoPlay = document.getElementById("toggle-online-autoplay");
+  const elOnlineAutoBadge = document.getElementById("online-auto-badge");
+  const elOnlineAutoSummary = document.getElementById("online-auto-summary");
   const elAutonomousElo = document.getElementById("select-autonomous-elo");
   const elPuzzleBadge = document.getElementById("puzzle-badge");
   const elPuzzleSummary = document.getElementById("puzzle-summary");
@@ -213,6 +215,48 @@
     renderFairPlay(result.fairPlay);
     renderOpeningBook(result.openingBook);
     renderTablebase(result.tablebase);
+    if (elOnlineAutoBadge && elOnlineAutoSummary) {
+      const ctx = result.boardContext || {};
+      const onlineOn = Boolean((elOnlineAutoPlay && elOnlineAutoPlay.checked) || (elAutonomous && elAutonomous.checked));
+      const eloVal = elAutonomousElo ? elAutonomousElo.value : "1600";
+      const sideLabel = ctx.playerColor === "b" ? "Black" : "White";
+      if (!onlineOn) {
+        elOnlineAutoBadge.textContent = `OFF • ${eloVal} Elo`;
+        elOnlineAutoBadge.style.borderColor = "#30363d";
+        elOnlineAutoBadge.style.color = "#8b949e";
+        elOnlineAutoSummary.textContent = ctx.isOnlineGame
+          ? `Normal game detected (${sideLabel}). Toggle above to auto-play.`
+          : ctx.isPracticeBoard
+          ? `Practice board detected (${sideLabel}). Toggle above to auto-play.`
+          : "Auto-plays your moves in live, bot, daily & practice games.";
+      } else if (ctx.isPuzzle) {
+        elOnlineAutoBadge.textContent = `ARMED • ${eloVal} Elo`;
+        elOnlineAutoBadge.style.borderColor = "#f59e0b";
+        elOnlineAutoBadge.style.color = "#f59e0b";
+        elOnlineAutoSummary.textContent = "Puzzle page active — Puzzle Solver controls puzzle boards.";
+      } else if (ctx.isAnalysisBoard) {
+        elOnlineAutoBadge.textContent = `ARMED (ANALYSIS)`;
+        elOnlineAutoBadge.style.borderColor = "#f59e0b";
+        elOnlineAutoBadge.style.color = "#f59e0b";
+        elOnlineAutoSummary.textContent = "Open a Lichess/Chess.com live or bot game to auto-play moves.";
+      } else if (ctx.isGameOver) {
+        elOnlineAutoBadge.textContent = `GAME OVER`;
+        elOnlineAutoBadge.style.borderColor = "#8b949e";
+        elOnlineAutoBadge.style.color = "#8b949e";
+        elOnlineAutoSummary.textContent = "Game finished — waiting for next game.";
+      } else if (ctx.isOnlineGame || ctx.isPracticeBoard) {
+        const myTurn = ctx.currentTurn === ctx.playerColor;
+        elOnlineAutoBadge.textContent = `${myTurn ? "PLAYING" : "WAITING"} • ${eloVal} Elo`;
+        elOnlineAutoBadge.style.borderColor = "#10b981";
+        elOnlineAutoBadge.style.color = "#10b981";
+        elOnlineAutoSummary.textContent = `Active as ${sideLabel} • ${myTurn ? "Computing & executing move…" : "Waiting for opponent move."}`;
+      } else {
+        elOnlineAutoBadge.textContent = `ARMED • ${eloVal} Elo`;
+        elOnlineAutoBadge.style.borderColor = "#10b981";
+        elOnlineAutoBadge.style.color = "#10b981";
+        elOnlineAutoSummary.textContent = "Ready — open a Lichess, Chess.com, or Practice game.";
+      }
+    }
     if (elPuzzleBadge && elPuzzleSummary) {
       const ctx = result.boardContext || {};
       const solverOn = elPuzzleSolver ? elPuzzleSolver.checked : false;

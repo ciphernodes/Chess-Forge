@@ -259,9 +259,9 @@ fun SettingsScreen(
                 }
             }
 
-            // Online Auto-Play & Autonomous Move Selector Card
+            // Normal Game Auto-Play & Autonomous Move Selector Card
             SettingsSectionCard(
-                title = "Online Auto-Play & Level Selector",
+                title = "Normal Game Auto-Play (Lichess & Chess.com)",
                 icon = Icons.Default.AutoMode
             ) {
                 val activeProfile = AutonomousEloProfile.fromElo(config.autonomousEloProfile)
@@ -279,9 +279,9 @@ fun SettingsScreen(
                     ) {
                         Text(
                             text = if (autoPlayArmed) {
-                                "Online Auto-Play Active • ${activeProfile.title} (${activeProfile.subtitle})"
+                                "Normal Game Auto-Play Active • ${activeProfile.title} (${activeProfile.subtitle})"
                             } else {
-                                "Online Auto-Play Paused • Level: ${activeProfile.title}"
+                                "Normal Game Auto-Play Paused • Level: ${activeProfile.title}"
                             },
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
@@ -289,9 +289,9 @@ fun SettingsScreen(
                         )
                         Text(
                             text = if (autoPlayArmed) {
-                                "Plays live/daily Lichess & Chess.com games on your turn • Kinematic Bézier drag & click"
+                                "Auto-plays normal live, bot, daily & practice games on your turn • Kinematic Bézier drag & click"
                             } else {
-                                "Enable Online Auto-Play or Autonomous Mode to play moves automatically from 800 to 2800 Elo."
+                                "Enable Normal Game Auto-Play or Autonomous Mode to play moves in live/bot games from 800 to 2800 Elo."
                             },
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -300,8 +300,8 @@ fun SettingsScreen(
                 }
 
                 SettingsToggleItem(
-                    title = "Online Auto-Play (Lichess & Chess.com)",
-                    subtitle = "Automatically executes calibrated moves on your turn in live and daily online games",
+                    title = "Normal Game Auto-Play (Lichess & Chess.com)",
+                    subtitle = "Automatically executes calibrated moves on your turn in live, bot (/play/computer), daily, and Practice games",
                     checked = config.onlineAutoPlay,
                     testTag = "settings_switch_online_autoplay",
                     onCheckedChange = onToggleOnlineAutoPlay

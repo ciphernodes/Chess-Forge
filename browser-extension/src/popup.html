@@ -64,6 +64,34 @@
       <button id="btn-clear-telemetry" type="button" style="background:#21262d;color:#f87171;border:1px solid #ef4444;">Clear Session Telemetry</button>
     </section>
 
+    <section class="card" id="online-autoplay-card">
+      <div class="card-title">
+        <span>Normal Game Auto-Play</span>
+        <span id="online-auto-badge" class="pill-tag">OFF • Lichess &amp; Chess.com</span>
+      </div>
+      <div id="online-auto-summary" class="muted">Auto-plays your moves in live, bot, daily &amp; practice games.</div>
+      <div class="row">
+        <label for="toggle-online-autoplay">Enable Normal Game Auto-Play</label>
+        <input type="checkbox" id="toggle-online-autoplay" />
+      </div>
+      <div class="row">
+        <label for="toggle-autonomous">Autonomous Human-Like Pacing</label>
+        <input type="checkbox" id="toggle-autonomous" />
+      </div>
+      <div class="row">
+        <label for="select-autonomous-elo">Play Level (800–2800 Elo)</label>
+        <select id="select-autonomous-elo">
+          <option value="800">800 Elo (Beginner)</option>
+          <option value="1000">1000 Elo (Casual)</option>
+          <option value="1200">1200 Elo (Club Novice)</option>
+          <option value="1600" selected>1600 Elo (Intermediate)</option>
+          <option value="2000">2000 Elo (Expert)</option>
+          <option value="2400">2400 Elo (Master / IM)</option>
+          <option value="2800">2800 Elo (Max GM Engine)</option>
+        </select>
+      </div>
+    </section>
+
     <section class="card" id="puzzle-card">
       <div class="card-title">
         <span>Puzzle Solver (All Levels)</span>
@@ -158,26 +186,6 @@
       <div class="row">
         <label for="toggle-humanizer">Humanizer Gate & Delay</label>
         <input type="checkbox" id="toggle-humanizer" checked />
-      </div>
-      <div class="row">
-        <label for="toggle-online-autoplay">Online Auto-Play (Lichess &amp; Chess.com)</label>
-        <input type="checkbox" id="toggle-online-autoplay" />
-      </div>
-      <div class="row">
-        <label for="toggle-autonomous">Autonomous Mode</label>
-        <input type="checkbox" id="toggle-autonomous" />
-      </div>
-      <div class="row">
-        <label for="select-autonomous-elo">Online / Auto-Play Level</label>
-        <select id="select-autonomous-elo">
-          <option value="800">800 Elo (Beginner)</option>
-          <option value="1000">1000 Elo (Casual)</option>
-          <option value="1200">1200 Elo (Club Novice)</option>
-          <option value="1600" selected>1600 Elo (Intermediate)</option>
-          <option value="2000">2000 Elo (Expert)</option>
-          <option value="2400">2400 Elo (Master / IM)</option>
-          <option value="2800">2800 Elo (Max GM Engine)</option>
-        </select>
       </div>
       <div class="row">
         <label for="select-turn">Side to Move</label>

@@ -463,7 +463,7 @@ export function evaluateExecutionAction(params: {
   }
 
   if (context.isPracticeBoard) {
-    if (!(params.practiceAutoPlay || params.autonomousMode)) {
+    if (!(params.practiceAutoPlay || params.autonomousMode || onlineConfig.enabled)) {
       return { action: "NONE", selectedMoveUci: null, delayMs: 0, reason: "PRACTICE_AUTO_OFF" };
     }
     if (candidateLines.length === 0) {

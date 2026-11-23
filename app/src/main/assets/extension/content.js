@@ -304,9 +304,17 @@
     if (count < 2) return null;
 
     let detectedTurn = null;
-    const moves = document.querySelectorAll("l4x kwdb, rm6 kwdb, .tview2 move");
-    if (moves.length > 0) {
-      detectedTurn = moves.length % 2 === 0 ? "w" : "b";
+    const activeBottomClock = document.querySelector(".rclock-bottom.rclock-turn, .rclock.rclock-bottom.running");
+    const activeTopClock = document.querySelector(".rclock-top.rclock-turn, .rclock.rclock-top.running");
+    if (activeBottomClock) {
+      detectedTurn = isFlipped ? "b" : "w";
+    } else if (activeTopClock) {
+      detectedTurn = isFlipped ? "w" : "b";
+    } else {
+      const moves = document.querySelectorAll("l4x kwdb, rm6 kwdb, .tview2 kwdb, .tview2 move:not(.empty)");
+      if (moves.length > 0) {
+        detectedTurn = moves.length % 2 === 0 ? "w" : "b";
+      }
     }
     return { boardEl, rect, isFlipped, grid, detectedTurn, isPracticeBoard: false, site: "lichess" };
   }
@@ -363,9 +371,19 @@
     if (count < 2) return null;
 
     let detectedTurn = null;
-    const halfMoves = document.querySelectorAll("wc-simple-move-list .node, .move-list-wrapper .node");
-    if (halfMoves.length > 0) {
-      detectedTurn = halfMoves.length % 2 === 0 ? "w" : "b";
+    const bottomTurnClock = document.querySelector(".clock-bottom.clock-player-turn, .player-bottom .clock-player-turn, [class*='clock-bottom'][class*='player-turn']");
+    const topTurnClock = document.querySelector(".clock-top.clock-player-turn, .player-top .clock-player-turn, [class*='clock-top'][class*='player-turn']");
+    if (bottomTurnClock) {
+      detectedTurn = isFlipped ? "b" : "w";
+    } else if (topTurnClock) {
+      detectedTurn = isFlipped ? "w" : "b";
+    } else {
+      const halfMoves = document.querySelectorAll(
+        "wc-simple-move-list [data-ply], wc-simple-move-list .node, .move-list [data-ply], .move-list-wrapper .node, [data-whole-move-number] [data-ply]"
+      );
+      if (halfMoves.length > 0) {
+        detectedTurn = halfMoves.length % 2 === 0 ? "w" : "b";
+      }
     }
     return { boardEl, rect, isFlipped, grid, detectedTurn, isPracticeBoard: false, site: "chesscom" };
   }
@@ -1284,18 +1302,21 @@
     return result;
   }
 
-  function fallbackBudget() {
-    const profile = config.cpuProfile || "balanced";
-    if (profile === "eco") return { depth: Math.min(config.maxDepth || 3, 3), moveTimeMs: 200 };
-    if (profile === "turbo") return { depth: Math.min(config.maxDepth || 6, 6), moveTimeMs: 550 };
-    return { depth: Math.min(config.maxDepth || 4, 4), moveTimeMs: 320 };
+  function fallbackBudget(cfg) {
+    const activeCfg = cfg || config;
+    const profile = activeCfg.cpuProfile || "balanced";
+    const cap = activeCfg.maxDepth || 14;
+    if (profile === "eco") return { depth: Math.min(cap, 3), moveTimeMs: 200 };
+    if (profile === "turbo") return { depth: Math.min(cap, 6), moveTimeMs: 550 };
+    return { depth: Math.min(cap, 4), moveTimeMs: 320 };
   }
 
-  function runFallbackJsAnalysis(fen, turn) {
+  function runFallbackJsAnalysis(fen, turn, cfg) {
     if (!window.ChessForgeEngine) return null;
-    const budget = fallbackBudget();
+    const activeCfg = cfg || config;
+    const budget = fallbackBudget(activeCfg);
     const raw = window.ChessForgeEngine.analyzePosition(fen, {
-      multiPv: config.multiPv,
+      multiPv: activeCfg.multiPv || config.multiPv,
       maxDepth: budget.depth,
       moveTimeMs: budget.moveTimeMs
     });
@@ -1645,17 +1666,21 @@
       )
     );
 
+    const isAnalysisBoard =
+      !isPuzzle &&
+      !boardInfo.isPracticeBoard &&
+      (path.includes("/analysis") || path.includes("/editor") || path.includes("/study"));
+
     const isOnlineGame =
       !isPuzzle &&
       !boardInfo.isPracticeBoard &&
       (site === "lichess" || site === "chesscom") &&
-      !path.includes("/analysis") &&
-      !path.includes("/editor") &&
-      !path.includes("/study");
+      !isAnalysisBoard;
 
     return {
       site,
       isOnlineGame,
+      isAnalysisBoard,
       isPuzzle,
       isPracticeBoard: Boolean(boardInfo.isPracticeBoard),
       isGameOver,
@@ -1697,10 +1722,11 @@
         multiPv: Math.max(2, config.multiPv || 2)
       });
     }
-    if (context && context.isOnlineGame && (config.onlineAutoPlay || config.autonomousMode)) {
+    if (context && (context.isOnlineGame || context.isPracticeBoard) && (config.onlineAutoPlay || config.autonomousMode)) {
       const prof = resolveOnlineProfile(config.autonomousEloProfile || config.targetElo);
+      const profDepth = prof.depth || 16;
       return Object.assign({}, config, {
-        maxDepth: Math.min(config.maxDepth || prof.searchDepth, prof.searchDepth),
+        maxDepth: Math.min(config.maxDepth || profDepth, profDepth),
         skillLevel: prof.skill,
         multiPv: Math.max(3, config.multiPv || 4)
       });
@@ -2174,22 +2200,30 @@
       });
     }
 
-    // 1. Offline Practice Board Sparring Auto-Play
+    // 1. Offline Practice Board Sparring & Auto-Play
     if (practiceAutoTimer) clearTimeout(practiceAutoTimer);
     if (
       boardInfo.isPracticeBoard === true &&
-      (config.practiceAutoPlay || config.autonomousMode) &&
+      (config.practiceAutoPlay || config.autonomousMode || config.onlineAutoPlay) &&
       activeResult.lines &&
       activeResult.lines.length > 0 &&
       typeof window.__chessForgeMakePracticeMove === "function"
     ) {
-      const baseDelay = Math.max(250, Math.min(2500, parseInt(config.practiceHumanDelayMs || 650, 10)));
-      const jitter = Math.round((Math.random() - 0.5) * Math.min(240, baseDelay * 0.35));
-      practiceAutoTimer = setTimeout(() => {
-        if (config.enabled && (config.practiceAutoPlay || config.autonomousMode) && boardInfo.isPracticeBoard === true) {
-          window.__chessForgeMakePracticeMove(activeResult.lines[0].uci);
-        }
-      }, baseDelay + jitter);
+      const shouldPlaySide =
+        config.practiceAutoPlay ||
+        ((config.onlineAutoPlay || config.autonomousMode) &&
+          (config.turnOverride === "w" || config.turnOverride === "b"
+            ? turn === config.turnOverride
+            : turn === ctx.playerColor));
+      if (shouldPlaySide) {
+        const baseDelay = Math.max(250, Math.min(2500, parseInt(config.practiceHumanDelayMs || 650, 10)));
+        const jitter = Math.round((Math.random() - 0.5) * Math.min(240, baseDelay * 0.35));
+        practiceAutoTimer = setTimeout(() => {
+          if (config.enabled && (config.practiceAutoPlay || config.autonomousMode || config.onlineAutoPlay) && boardInfo.isPracticeBoard === true) {
+            window.__chessForgeMakePracticeMove(activeResult.lines[0].uci);
+          }
+        }, baseDelay + jitter);
+      }
       return;
     }
 
@@ -2380,7 +2414,7 @@
               const enriched = enrichResult(fen, turn, resp.result);
               publishResult(boardInfo, turn, enriched, playedMove, boardContext);
             } else {
-              const fallback = runFallbackJsAnalysis(fen, turn);
+              const fallback = runFallbackJsAnalysis(fen, turn, effectiveConfig);
               if (fallback) publishResult(boardInfo, turn, fallback, playedMove, boardContext);
               else setStatus("ERROR");
             }
@@ -2391,7 +2425,7 @@
       }
     }
 
-    const fallback = runFallbackJsAnalysis(fen, turn);
+    const fallback = runFallbackJsAnalysis(fen, turn, effectiveConfig);
     if (fallback && seq === activeSearchSeq) {
       publishResult(boardInfo, turn, fallback, playedMove, boardContext);
     }
